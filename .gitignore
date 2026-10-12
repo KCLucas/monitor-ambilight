@@ -1,0 +1,23 @@
+# Zugangsdaten/Secrets - niemals ins Repo (WLAN-Passwort steckt in WLED-Backups!)
+.env
+secrets.h
+wled_cfg*.json
+*.pem
+*.key
+
+# PlatformIO / Arduino - Build-Ausgaben
+.pio/
+build/
+*.bin
+*.elf
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE / System
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

@@ -1,0 +1,23 @@
+{
+  "_hinweis": "Monitor-Werte sind PLATZHALTER (4x 27 Zoll 16:9). Echte Diagonalen eintragen oder width_cm/height_cm der Rueckseite ausmessen. Reihenfolge = Reihenfolge der LEDs am Controller.",
+  "strip": {
+    "type": "WS2812 ECO",
+    "volts": 5,
+    "leds_per_m": 60,
+    "leds_per_strip": 300,
+    "count": 2,
+    "ma_per_led_full_white": 60
+  },
+  "psu": {
+    "volts": 5,
+    "amps": 10,
+    "headroom": 0.85
+  },
+  "inset_cm": 2,
+  "monitors": [
+    { "name": "main", "diagonal_inch": 27, "aspect": [16, 9], "enabled": true },
+    { "name": "links", "diagonal_inch": 27, "aspect": [16, 9], "enabled": true },
+    { "name": "rechts", "diagonal_inch": 27, "aspect": [16, 9], "enabled": true },
+    { "name": "oben", "diagonal_inch": 27, "aspect": [16, 9], "enabled": true }
+  ]
+}
