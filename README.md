@@ -129,6 +129,8 @@ Firewall-Freigaben für Port 8765 und 8766 gibt es nur im privaten Netzwerkprofi
 
 Die Bildschirmaufnahme läuft in einem eigenen Prozess (`tools/capture.py`): Entzieht Windows die Aufnahme (Monitor aus/an, Vollbild-Wechsel, UAC, Standby) oder stürzt sie ab, startet sie frisch, ohne dass Webseite oder LEDs ausfallen. dxcams eigene Erholung wird dabei umgangen, weil sie selbst abstürzt. Fehlt ein Monitor (aus oder im Tiefschlaf – DisplayPort-Monitore melden sich dann bei Windows ab), bleiben seine LEDs schwarz, die Vorschau zeigt „kein Signal“, und alle 30 s wird geprüft, ob er zurück ist.
 
+Hinweis-Licht für andere Programme (z. B. EDITH bei einem abgelaufenen Timer): `POST /api/alert` mit `{"color": "#ff0000", "style": "pulse", "seconds": 600}` (pulse = atmen, blink = einmal weich aufleuchten) liegt in voller Helligkeit über allem, auch wenn das Licht aus oder gedimmt ist; `{"off": true}` beendet es. Die Einstellungen bleiben dabei unberührt – danach blendet das Licht zurück zu dem, was vorher lief. Spätestens nach einer Stunde läuft es aus.
+
 Einstellungen werden in `settings.json` gespeichert. Weitere Aufrufe:
 
 - `start.bat --dry-run` – nichts an WLED senden, nur Vorschau (zum Testen ohne Hardware)

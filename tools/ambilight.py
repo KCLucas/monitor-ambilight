@@ -56,6 +56,11 @@ SCENES = {
 SCENE_NAMES = (*SCENES, "custom")
 AUTO_SCENES = {"game": "gaming", "video": "film"}  # Erkennung im Vordergrund -> Szene
 AUTO_DEBOUNCE = 2  # s, so lange muss eine Erkennung stabil sein, bevor die Szene wechselt
+# Hinweis-Licht (z. B. EDITH: Timer abgelaufen) ueber allem anderen: pulse = atmen bis zum Ende,
+# blink = ein weiches Aufleuchten ueber die ganze Dauer. Laeuft spaetestens nach ALERT_MAX s aus.
+ALERT_STYLES = ("pulse", "blink")
+ALERT_MAX = 3600
+PULSE_PERIOD = 1.6  # s je Atemzug
 
 DEFAULT_SETTINGS = {
     "mode": "ambilight",
@@ -168,6 +173,7 @@ class Engine:
         self.insets = {}  # Taskleiste je Anzeige: {(links, oben): (l, o, r, u)}
         self.active_monitor = None  # Monitor mit dem aktiven Fenster (fuer "Aktiver Monitor fuer alle")
         self.auto_reset = False
+        self.alert = None  # Hinweis-Licht, siehe set_alert
 
         names = [mon["name"] for mon in cfg["monitors"] if mon.get("enabled", True)]
         self.settings = dict(DEFAULT_SETTINGS, monitors={}, custom=dict(DEFAULT_SETTINGS["custom"]))
@@ -221,7 +227,42 @@ class Engine:
             "scenes": SCENES,
             "missing": list(self.capture.missing),
             "spread_source": self._spread_source(settings),
+            "alert": self.alert and {"style": self.alert["style"], "color": self.alert["color"]},
         }
+
+    def set_alert(self, data):
+        """Hinweis-Licht an ({"color": "#ff0000", "style": "pulse", "seconds": 600}) oder aus ({"off": true}).
+        Die Einstellungen bleiben unberuehrt - nach dem Hinweis leuchtet sofort wieder alles wie vorher."""
+        if data.get("off"):
+            with self.lock:
+                self.alert = None
+            return
+        color = data.get("color", "#ff0000")
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", str(color)):
+            raise ValueError(f"Farbe {color!r} ist kein #rrggbb")
+        style = data.get("style", "pulse")
+        if style not in ALERT_STYLES:
+            raise ValueError(f"style muss eins von {ALERT_STYLES} sein")
+        seconds = min(ALERT_MAX, max(0.2, float(data.get("seconds", 600))))
+        rgb = np.array([int(color[i : i + 2], 16) for i in (1, 3, 5)], dtype=np.float32)
+        now = time.monotonic()
+        with self.lock:
+            self.alert = {"color": color.lower(), "rgb": rgb, "style": style, "start": now, "end": now + seconds}
+
+    def _alert_frame(self, alert, leds):
+        """Farben aller LEDs fuer das Hinweis-Licht (None = abgelaufen)."""
+        now = time.monotonic()
+        if now >= alert["end"]:
+            with self.lock:
+                if self.alert is alert:
+                    self.alert = None
+            return None
+        elapsed = now - alert["start"]
+        if alert["style"] == "pulse":
+            level = 0.08 + 0.92 * (0.5 - 0.5 * np.cos(2 * np.pi * elapsed / PULSE_PERIOD))
+        else:
+            level = np.sin(np.pi * elapsed / (alert["end"] - alert["start"]))
+        return np.tile(alert["rgb"] * level, (leds, 1))
 
     def _save(self):
         """Einstellungen sichern; Aufruf nur mit gehaltenem Lock."""
@@ -453,10 +494,18 @@ class Engine:
                 settings = self.settings
             self._connect()
 
-            current = self._target(settings, captured)
-            # Glaettung gegen Flackern: Anteil der alten Farbe, der pro Frame erhalten bleibt
-            smoothed += (current - smoothed) * (1 - settings["smoothing"])
-            output = np.clip(smoothed * settings["brightness"] / 100, 0, 255)
+            alert = self.alert
+            current = self._alert_frame(alert, len(smoothed)) if alert else None
+            if current is not None:
+                # Hinweis: ungeglaettet und in voller Helligkeit - auch wenn das Licht aus oder gedimmt ist.
+                # Danach blendet die normale Glaettung zurueck zu dem, was vorher lief.
+                output = np.clip(current, 0, 255)
+                smoothed[:] = np.clip(current * 100 / max(1, settings["brightness"]), 0, 255)
+            else:
+                current = self._target(settings, captured)
+                # Glaettung gegen Flackern: Anteil der alten Farbe, der pro Frame erhalten bleibt
+                smoothed += (current - smoothed) * (1 - settings["smoothing"])
+                output = np.clip(smoothed * settings["brightness"] / 100, 0, 255)
             if self.sender:
                 # Bildschirmwerte sind gamma-kodiert, LEDs leuchten linear: ohne Korrektur glimmt
                 # "Schwarz" (Werte um 20) sichtbar. Die Vorschau zeigt weiter die unkorrigierten Farben.

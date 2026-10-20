@@ -54,12 +54,13 @@ def serve(engine, host, port, web_dir, phone=None, https_port=None, tls=None, ca
                 self._json(404, {"error": "nicht gefunden"})
 
         def do_POST(self):
-            if self.path != "/api/settings":
+            actions = {"/api/settings": engine.update_settings, "/api/alert": engine.set_alert}
+            if self.path not in actions:
                 self._json(404, {"error": "nicht gefunden"})
                 return
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                engine.update_settings(json.loads(self.rfile.read(length) or b"{}"))
+                actions[self.path](json.loads(self.rfile.read(length) or b"{}"))
             except (ValueError, TypeError, AttributeError) as err:
                 self._json(400, {"error": str(err)})
                 return
