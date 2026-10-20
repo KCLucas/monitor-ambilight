@@ -98,6 +98,9 @@ class DdpSender:
     def __init__(self, addr):
         self.addr = addr
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        if hasattr(socket, "SIO_UDP_CONNRESET"):
+            # Windows: startet WLED neu, meldet das naechste sendto sonst "Verbindung zurueckgesetzt"
+            self.sock.ioctl(socket.SIO_UDP_CONNRESET, False)
         self.seq = 0
 
     def send(self, rgb_bytes):
@@ -107,7 +110,10 @@ class DdpSender:
             last = offset + DDP_MAX_DATA >= len(rgb_bytes)
             flags = 0x40 | (0x01 if last else 0x00)  # Version 1, Push erst beim letzten Paket
             header = bytes([flags, self.seq, 0x0B, 0x01]) + offset.to_bytes(4, "big") + len(chunk).to_bytes(2, "big")
-            self.sock.sendto(header + chunk, self.addr)
+            try:
+                self.sock.sendto(header + chunk, self.addr)
+            except OSError:
+                return  # WLED gerade weg (Neustart, WLAN) - das naechste Bild versucht es wieder
 
 
 def _number(key, value):
@@ -485,6 +491,18 @@ class Engine:
         return current
 
     def run(self):
+        """Bildschleife. Ein Fehler darf sie nie beenden - sonst stehen die LEDs still, waehrend Webseite
+        und EDITH weiter Einstellungen aendern, die niemand mehr umsetzt."""
+        while True:
+            try:
+                self._loop()
+            except Exception:
+                traceback.print_exc()
+                status, self.status = self.status, "Fehler in der Bildschleife - startet neu (Details in der Konsole)"
+                time.sleep(1)
+                self.status = status
+
+    def _loop(self):
         smoothed = np.zeros_like(self.output)
         captured = np.zeros_like(self.output)
         frames, window_start = 0, time.perf_counter()
