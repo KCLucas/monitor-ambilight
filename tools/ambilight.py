@@ -256,12 +256,27 @@ class Engine:
         try:
             self._wled("/json/cfg", {"if": {"live": {"maxbri": True}}})
             segments = self._wled("/json/state").get("seg", [])
-            self._wled("/json/state", {
-                "on": True,
-                "seg": [{"id": s["id"], "fx": 0, "col": [rgb, [0, 0, 0], [0, 0, 0]]} for s in segments],
-            })
+            seg = [{"id": s["id"], "on": True, "fx": 0, "col": [rgb, [0, 0, 0], [0, 0, 0]]} for s in segments]
+            self._wled("/json/state", {"on": True, "seg": seg})
+            # Auch als Start-Preset: nach einem Neustart (Strom weg) kaeme WLED sonst mit seiner
+            # Werksfarbe Orange-Gelb hoch und leuchtet, bis dieses Programm laeuft. Presets lassen sich
+            # waehrend des Live-Stroms nicht per API speichern - daher die Datei direkt hochladen.
+            preset = {"0": {}, "1": {"n": "Rueckfall (PC sendet nicht)", "on": True, "bri": 128, "seg": seg}}
+            self._wled_upload("/presets.json", json.dumps(preset).encode())
+            self._wled("/json/cfg", {"def": {"ps": 1, "on": True}})
         except (OSError, ValueError) as err:
             print(f"WLED-Rueckfallfarbe nicht gesetzt: {err}")
+
+    def _wled_upload(self, name, data):
+        """Datei ins WLED-Dateisystem schreiben (wie /edit im Browser)."""
+        ip = socket.gethostbyname(self.host)
+        boundary = "----ambilight" + os.urandom(8).hex()
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"data\"; filename=\"{name}\"\r\n"
+                f"Content-Type: application/json\r\n\r\n").encode() + data + f"\r\n--{boundary}--\r\n".encode()
+        req = urllib.request.Request(f"http://{ip}/upload", data=body, method="POST",
+                                     headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+        with urllib.request.urlopen(req, timeout=5):
+            pass
 
     def watch_wled(self):
         """Fragt alle 5 s die WLED-API ab: erreichbar?, IP fuer den Link, konfigurierte LED-Zahl.
