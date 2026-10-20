@@ -39,7 +39,7 @@ class AudioListener:
         self.device_hint = device_hint
         self.lock = threading.Lock()
         self.state = {"bass": 0.0, "mid": 0.0, "high": 0.0, "beats": 0, "last_beat": 0.0, "strength": 0.0,
-                      "bpm": 0.0, "heard": 0.0, "energy": 0.0}
+                      "bpm": 0.0, "heard": 0.0, "energy": 0.0, "drive": 0.0}
         self._loudest = 1e-6  # lauteste Stelle der letzten ~40 s - Massstab fuer "energy"
         self.error = None
         self._stop = threading.Event()
@@ -110,16 +110,30 @@ class AudioListener:
         dt = len(block) / 48000
         bass = raw["bass"]
         average = (sum(self._history) / len(self._history)) if self._history else bass
+        # Kick = schlagartiger Anstieg gegenueber den letzten ~50 ms - eine anschwellende Bass-Melodie zaehlt nicht
+        rise = bass - min(list(self._history)[-5:], default=bass)
         self._history.append(bass)
         with self.lock:
             state = self.state
             state.update(levels, heard=now if self._peaks["bass"] > 1e-4 and np.abs(block).max() > 1e-4 else state["heard"])
             tau = 0.25 if target > state["energy"] else 1.2
             state["energy"] += (target - state["energy"]) * (1 - np.exp(-dt / tau))
-            if (bass > average * BEAT_FACTOR and levels["bass"] > 0.25
-                    and now - state["last_beat"] > BEAT_GAP):
-                if state["last_beat"] and now - state["last_beat"] < 2:
-                    self._intervals.append(now - state["last_beat"])
+            # Drive: kommen die Kicks regelmaessig im Takt? Nur dann volle Party - in melodischen Teilen ohne Kick
+            # faellt er, und das Licht wird ruhig (auch wenn es laut ist)
+            # Regelmaessigkeit der letzten 8 Kicks (halbe/doppelte Abstaende zaehlen mit - Off-Beats, ausgelassene
+            # Kicks); bleiben sie laenger als 2 Takte aus, geht es gegen 0. Weich: ~1,5 s rauf, ~2 s runter.
+            recent = list(self._intervals)[-8:]
+            expected = float(np.median(recent)) if len(recent) >= 4 else 0.5
+            gap = now - state["last_beat"] if state["last_beat"] else 99
+            regular = float(np.mean([any(abs(iv - k * expected) < 0.2 * k * expected for k in (0.5, 1, 2))
+                                     for iv in recent])) if len(recent) >= 4 else 0.0
+            target_drive = 0.0 if gap > 2 * expected else regular
+            tau = 1.5 if target_drive > state["drive"] else 2.0
+            state["drive"] += (target_drive - state["drive"]) * (1 - np.exp(-dt / tau))
+            if (bass > average * BEAT_FACTOR and rise > average * 0.5 and levels["bass"] > 0.25
+                    and gap > BEAT_GAP):
+                if gap < 2:
+                    self._intervals.append(gap)
                     state["bpm"] = 60 / float(np.median(self._intervals))
                 state["beats"] += 1
                 state["last_beat"] = now
@@ -142,8 +156,9 @@ class PartyEffect:
     """Malt auf die ganze Monitorwand als eine Flaeche: jede LED hat ihre echte Position (Monitor-Position +
     Lage am Rand), Effekte laufen ueber Monitorgrenzen hinweg - wo zwei Monitore aneinanderstossen, passt es.
 
-    Wie stark es zugeht, folgt der Energie des Songs: in leisen Stellen (Ausfaden, Break) blenden die Effekte
-    weich aus, bis nur ruhiges Farbatmen bleibt; beim Drop kommen sie zurueck - samt weissen Flashes."""
+    Wie stark es zugeht, folgt dem Song: nur wenn es laut ist UND die Kicks regelmaessig im Takt kommen, laeuft die
+    volle Party. Leise Stellen (Ausfaden) und melodische Teile ohne Kick blenden weich aus, bis nur ruhiges
+    Farbatmen bleibt; mit dem Drop kommen die Effekte zurueck - samt weissen Flashes."""
 
     def __init__(self, monitors):
         self.monitors = monitors  # Layout aus der Aufnahme: name, count, pos, size, leds (0..1 am Monitorrand)
@@ -290,11 +305,14 @@ class PartyEffect:
         self.silent_since = None
 
         bpm = a["bpm"] if 70 < a["bpm"] < 200 else 128
+        if bpm > 170:
+            bpm /= 2  # Off-Beats mitgezaehlt - fuer die Bewegungen das halbe Tempo
         beat_len = 60 / bpm
         beats = a["beats"]
         energy = a.get("energy", 1.0)
         # Party-Staerke folgt der Energie: unter ~0,25 nur Atmen, ab ~0,7 volle Party - weich, ohne Spruenge
-        target = 1 - _smooth((energy - 0.25) / 0.45)
+        drive = a.get("drive", 1.0)
+        target = 1 - _smooth((energy - 0.25) / 0.45) * _smooth((drive - 0.2) / 0.5)
         self.calm += (target - self.calm) * (1 - np.exp(-dt / 0.6))
         party = 1 - self.calm
 
