@@ -1,32 +1,32 @@
-"""Party-Modus: Licht im Takt der Musik - wie auf einem Rave.
+"""Party-Modus: Licht im Takt der Musik - wie auf einem Rave, aber ruhig in den Farben.
 
 Hoert per WASAPI-Loopback den Wave-Link-Kanal "Music" mit (nur die Musik, ohne Voice Chat und EDITH, und
 unabhaengig von den Lautstaerke-Reglern). Daraus: Bass, Mitten, Hoehen, Beats und Tempo.
 
-Auf den LEDs (jeder Monitor-Ring fuer sich):
-- Laser: schmale, grelle Strahlen kreisen um jeden Monitor, Tempo nach BPM, Richtung kippt alle 8 Beats
-- Beat-Flash: auf jeden Beat blitzt alles in der Palettenfarbe auf (starke Beats heller), klingt schnell ab
-- Bass-Pumpe: der Grundton atmet mit dem Bass
-- Funkeln: Hoehen (Hi-Hats) lassen einzelne LEDs weiss aufblitzen
-- alle 16 Beats eine neue Rave-Palette
-Ohne Musik: langsames Farbwabern, bis wieder etwas laeuft.
+Farben: pro Song EINE Farbrichtung (Hauptfarbe + verwandter Nachbarton) - von EDITH aus dem Spotify-Cover
+(POST /api/party), sonst eine zufaellige Familie, die nach einer Songpause wechselt. Wechsel blenden weich ueber.
+Kein buntes Hin und Her und keine harten weissen Blitze (Epilepsie) - Bewegung kommt vom Blinken im Takt.
+
+Auf der ganzen Monitorwand als eine Flaeche: Laserfaecher um die Mitte, Druckwelle pro Beat, Balken alle 4 Beats,
+die Wand blinkt auf jeden Beat in der Hauptfarbe, Grundton pumpt mit dem Bass, Hi-Hats funkeln hell getoent.
 """
 
+import colorsys
 import threading
 import time
 from collections import deque
 
 import numpy as np
 
-# Rave-Paletten: (Laser/Flash, zweite Laserfarbe, Grundton)
-PALETTES = [
-    ((255, 0, 200), (0, 230, 255), (40, 0, 60)),     # Magenta / Cyan
-    ((0, 255, 90), (150, 0, 255), (0, 30, 20)),      # Laser-Gruen / UV
-    ((255, 20, 20), (30, 60, 255), (40, 0, 10)),     # Rot / Blau
-    ((255, 120, 0), (255, 0, 120), (40, 10, 0)),     # Orange / Pink
-    ((120, 0, 255), (255, 255, 255), (20, 0, 40)),   # UV / Weiss
-    ((0, 255, 255), (255, 230, 0), (0, 25, 35)),     # Cyan / Gelb
-]
+# Farbfamilien ohne Spotify: (Hauptfarbe, Nachbarton)
+FAMILIES = [((255, 0, 200), (150, 0, 255)),   # Magenta / Lila
+            ((0, 220, 255), (0, 90, 255)),    # Cyan / Blau
+            ((255, 20, 30), (255, 90, 0)),    # Rot / Orange
+            ((0, 255, 110), (0, 210, 200)),   # Gruen / Tuerkis
+            ((130, 0, 255), (60, 40, 255)),   # UV / Indigo
+            ((255, 0, 90), (255, 40, 160))]   # Pink / Rosa
+FADE = 2.5             # s - so weich wechselt die Farbrichtung
+SONG_BREAK = 1.2       # s Stille = neuer Song (ohne Spotify: neue Farbfamilie)
 BEAT_GAP = 0.23        # s - schneller als ~260 BPM gibt es keine Beats
 BEAT_FACTOR = 1.25     # Bass muss so viel ueber dem Schnitt der letzten ~0,8 s liegen (an echter Musik abgestimmt)
 SILENCE = 0.6          # s ohne Audio = Pause
@@ -122,6 +122,13 @@ class PartyEffect:
 
     def __init__(self, monitors):
         self.monitors = monitors  # Layout aus der Aufnahme: name, count, pos, size, leds (0..1 am Monitorrand)
+        self.rng = np.random.default_rng()
+        family = FAMILIES[self.rng.integers(len(FAMILIES))]
+        self.colors = np.array(family, np.float32)   # aktuelle (Haupt, Nachbar)
+        self.fade_from, self.fade_to, self.fade_start = self.colors.copy(), self.colors.copy(), 0.0
+        self.from_spotify = 0.0       # wann EDITH zuletzt Farben aus dem Cover geschickt hat
+        self.silent_since = None
+        self.blink = 0.0
         xy = []
         for m in monitors:
             leds = np.array(m.get("leds") or [[i / max(1, m["count"]), 0.5] for i in range(m["count"])], np.float32)
@@ -137,12 +144,25 @@ class PartyEffect:
         self.total = len(xy)
         self.phase = 0.0
         self.last = time.monotonic()
-        self.flash = 0.0
         self.waves = deque(maxlen=6)  # (Startzeit, Farbe, Staerke) - eine Druckwelle pro Beat
         self.sweep = None             # (Startzeit, Dauer, Farbe) - alle 4 Beats einmal quer ueber die Wand
         self.seen_beats = 0
         self.direction = 1
-        self.rng = np.random.default_rng()
+
+    def set_colors(self, colors, external=True):
+        """Neue Farbrichtung (Liste aus zwei #rrggbb) - blendet weich ueber."""
+        rgb = [[int(c[i:i + 2], 16) for i in (1, 3, 5)] for c in colors[:2]]
+        if len(rgb) == 1:
+            h, s, v = colorsys.rgb_to_hsv(*(np.array(rgb[0]) / 255))
+            rgb.append([round(x * 255) for x in colorsys.hsv_to_rgb((h + 25 / 360) % 1, s, v)])
+        self.fade_from, self.fade_to = self.colors.copy(), np.array(rgb, np.float32)
+        self.fade_start = time.monotonic()
+        if external:
+            self.from_spotify = self.fade_start
+
+    def _update_colors(self, now):
+        t = min(1.0, (now - self.fade_start) / FADE)
+        self.colors = self.fade_from + (self.fade_to - self.fade_from) * (t * t * (3 - 2 * t))
 
     def frame(self, audio):
         now = time.monotonic()
@@ -151,28 +171,35 @@ class PartyEffect:
         a = audio.levels() if audio else None
         playing = bool(a and now - a["heard"] < SILENCE)
 
+        self._update_colors(now)
+        main, near = self.colors
         if not playing:
-            # Pause: ein Regenbogen zieht langsam quer ueber die ganze Wand
-            self.phase += dt * 0.04
-            hue = (self.x * 0.8 + self.phase) % 1
-            return np.stack([np.sin(2 * np.pi * (hue + k / 3)) for k in range(3)], axis=1) * 35 + 35
+            # Pause: die Farbrichtung wogt langsam quer ueber die Wand
+            self.silent_since = self.silent_since or now
+            self.phase += dt * 0.05
+            mix = (np.sin(2 * np.pi * (self.x + self.phase)) * 0.5 + 0.5)[:, None]
+            return (main * mix + near * (1 - mix)) * 0.3
+        if self.silent_since and now - self.silent_since > SONG_BREAK and now - self.from_spotify > 600:
+            # neuer Song ohne Spotify-Farben: andere Familie
+            family = FAMILIES[self.rng.integers(len(FAMILIES))]
+            self.set_colors(["#%02x%02x%02x" % c for c in family], external=False)
+        self.silent_since = None
 
         bpm = a["bpm"] if 70 < a["bpm"] < 200 else 128
         beat_len = 60 / bpm
         beats = a["beats"]
-        palette = PALETTES[(beats // 16) % len(PALETTES)]
-        laser1, laser2, base = (np.array(c, np.float32) for c in palette)
+        laser1, laser2, base = main, near, main * 0.12
         if beats != self.seen_beats:
             self.seen_beats = beats
-            self.waves.append((now, laser1 if beats % 2 else laser2, 0.6 + 0.4 * a["strength"]))
-            self.flash = 0.45 * a["strength"] if a["strength"] > 0.6 else 0.0  # nur harte Kicks blitzen alles
+            self.waves.append((now, main, 0.6 + 0.4 * a["strength"]))
+            self.blink = 0.35 + 0.35 * a["strength"]   # die ganze Wand blinkt in der Hauptfarbe
             if beats % 4 == 0:
-                self.sweep = (now, beat_len, laser2)
+                self.sweep = (now, beat_len, near)
             if beats % 8 == 0:
                 self.direction *= -1
 
-        # Grundton pumpt mit dem Bass
-        out = np.tile(base * (0.15 + 0.6 * a["bass"] ** 2), (self.total, 1))
+        # Grundton pumpt mit dem Bass (nie ganz schwarz - kein hartes An/Aus)
+        out = np.tile(base * (1 + 2 * a["bass"] ** 2), (self.total, 1))
 
         # Laserfaecher dreht sich um die Mitte der Wand: eine Umdrehung in 4 Beats
         self.phase += self.direction * dt / (4 * beat_len)
@@ -202,10 +229,11 @@ class PartyEffect:
                 band = np.exp(-((self.x - front) / 0.06) ** 2)
                 out = np.maximum(out, band[:, None] * color)
 
-        if self.flash > 0.02:
-            out = np.maximum(out, laser1 * self.flash)
-            self.flash *= np.exp(-dt / 0.05)
-        # Hi-Hats: einzelne LEDs blitzen weiss
-        sparks = self.rng.random(self.total) < a["high"] ** 3 * 0.06
-        out[sparks] = 255
+        # Beat-Blinken: weich an, klingt in ~0,15 s ab
+        if self.blink > 0.02:
+            out = np.maximum(out, main * self.blink)
+            self.blink *= np.exp(-dt / 0.12)
+        # Hi-Hats: einzelne LEDs funkeln - hell in der Hauptfarbe, nicht reinweiss
+        sparks = self.rng.random(self.total) < a["high"] ** 3 * 0.03
+        out[sparks] = main * 0.5 + 110
         return np.clip(out, 0, 255)

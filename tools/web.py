@@ -54,7 +54,8 @@ def serve(engine, host, port, web_dir, phone=None, https_port=None, tls=None, ca
                 self._json(404, {"error": "nicht gefunden"})
 
         def do_POST(self):
-            actions = {"/api/settings": engine.update_settings, "/api/alert": engine.set_alert}
+            actions = {"/api/settings": engine.update_settings, "/api/alert": engine.set_alert,
+                       "/api/party": engine.set_party_colors}
             if self.path not in actions:
                 self._json(404, {"error": "nicht gefunden"})
                 return

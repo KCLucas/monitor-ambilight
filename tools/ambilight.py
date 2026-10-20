@@ -246,7 +246,17 @@ class Engine:
             return None
         levels = self.audio.levels()
         return {"bpm": round(levels["bpm"]) if 70 < levels["bpm"] < 200 else None,
+                "colors": ["#%02x%02x%02x" % tuple(int(v) for v in c) for c in self.party.fade_to],
+                "song": getattr(self, "party_song", ""),
                 "playing": time.monotonic() - levels["heard"] < 0.6, "error": self.audio.error}
+
+    def set_party_colors(self, data):
+        """Farbrichtung fuer den Party-Modus, z. B. von EDITH aus dem Spotify-Cover: {"colors": ["#ff0020", "#ff4126"]}."""
+        colors = data.get("colors") or []
+        if not 1 <= len(colors) <= 2 or not all(re.fullmatch(r"#[0-9a-fA-F]{6}", str(c)) for c in colors):
+            raise ValueError("colors muss 1-2 Farben als #rrggbb sein")
+        self.party.set_colors([c.lower() for c in colors])
+        self.party_song = str(data.get("song", ""))[:100]
 
     def set_alert(self, data):
         """Hinweis-Licht an ({"color": "#ff0000", "style": "pulse", "seconds": 600}) oder aus ({"off": true}).
