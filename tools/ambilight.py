@@ -182,6 +182,7 @@ class Engine:
         self.active_monitor = None  # Monitor mit dem aktiven Fenster (fuer "Aktiver Monitor fuer alle")
         self.auto_reset = False
         self.alert = None  # Hinweis-Licht, siehe set_alert
+        self.temp = None   # Aenderung auf Zeit (Twitch-Chat): {"until", "restore", "applied"}, siehe update_settings
 
         names = [mon["name"] for mon in cfg["monitors"] if mon.get("enabled", True)]
         self.settings = dict(DEFAULT_SETTINGS, monitors={}, custom=dict(DEFAULT_SETTINGS["custom"]))
@@ -416,6 +417,11 @@ class Engine:
             time.sleep(1)
 
     def update_settings(self, changes):
+        """changes darf "for": Sekunden enthalten (z. B. vom Twitch-Chat): danach stellt das Programm selbst zurueck,
+        wie es vorher war - auch wenn der Absender inzwischen neu gestartet ist. Eine Aenderung OHNE "for" (Lucas
+        stellt selbst um) beendet die Zeit, dann wird nichts zurueckgestellt."""
+        changes = dict(changes)
+        seconds = changes.pop("for", None)
         names = {m["name"] for m in self.monitors}
         with self.lock:
             old = self.settings
@@ -436,10 +442,30 @@ class Engine:
                 self.auto_reset = True  # sofort fuer das bewerten, was gerade laeuft
             if new["mode"] == "party" and old["mode"] != "party":
                 new["before_party"] = old["mode"]
+            if seconds:
+                # vorheriger Zustand der ERSTEN Zeit-Aenderung zaehlt; weitere verlaengern nur
+                restore = self.temp["restore"] if self.temp else {k: old[k] for k in ("mode", "color", "brightness")}
+                self.temp = {"until": time.monotonic() + min(3600.0, max(5.0, float(seconds))), "restore": restore,
+                             "applied": {k: new[k] for k in ("mode", "color")}}
+            else:
+                self.temp = None
             self.settings = new
             self._save()
         if new["off_when_pc_off"] != old["off_when_pc_off"]:
             self.set_wled_fallback(dark=new["off_when_pc_off"])
+
+    def watch_temp(self):
+        """Laeuft eine Aenderung auf Zeit ab, wieder herstellen - ausser es wurde inzwischen etwas anderes eingestellt."""
+        while True:
+            time.sleep(1)
+            with self.lock:
+                temp = self.temp
+                if not temp or time.monotonic() < temp["until"]:
+                    continue
+                self.temp = None
+                still = all(self.settings.get(k) == v for k, v in temp["applied"].items())
+            if still:
+                self.update_settings(temp["restore"])
 
     def _connect(self):
         """Startet bei Bedarf die Namensaufloesung von WLED im Hintergrund.
@@ -622,6 +648,7 @@ def main():
         engine = Engine(cfg, args.dry_run, args.settings)
         threading.Thread(target=engine.run, daemon=True).start()
         threading.Thread(target=engine.watch_wled, daemon=True).start()
+        threading.Thread(target=engine.watch_temp, daemon=True).start()
         threading.Thread(target=engine.watch_foreground, daemon=True).start()
         print(f"Oberflaeche: http://localhost:{args.port}  (Strg+C beendet)")
         if args.local:
