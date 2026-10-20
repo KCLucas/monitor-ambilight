@@ -248,6 +248,7 @@ class Engine:
         return {"bpm": round(levels["bpm"]) if 70 < levels["bpm"] < 200 else None,
                 "colors": ["#%02x%02x%02x" % tuple(int(v) for v in c) for c in self.party.fade_to],
                 "song": getattr(self, "party_song", ""),
+                "beats": levels["beats"], "level": round(1 - self.party.calm, 2),  # fuer EDITHs Orb im Takt
                 "playing": time.monotonic() - levels["heard"] < 0.6, "error": self.audio.error}
 
     def set_party_colors(self, data):
