@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0e0f12">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Ambilight">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<title>Monitor Ambilight</title>
+<style>
+  :root {
+    --bg: #0b0c0f;
+    --panel: #15171c;
+    --panel-2: #1c1f26;
+    --line: #262a33;
+    --text: #e9eaec;
+    --muted: #8a8f9a;
+    --faint: #555a65;
+    --accent: #ff7a18;
+    --ok: #3ecf8e;
+    --warn: #f5b041;
+    --bad: #ff6b6b;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  /* Kein Zoomen per Doppeltipp oder zwei Fingern - stoert beim schnellen Tippen auf dem Handy.
+     Scrollen bleibt erlaubt. */
+  html { touch-action: pan-x pan-y; -webkit-text-size-adjust: 100%; }
+  body { -webkit-user-select: none; user-select: none; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 30% -10%, #1a1420 0%, transparent 60%), var(--bg);
+    color: var(--text);
+    font: 14px/1.4 system-ui, "Segoe UI", -apple-system, sans-serif;
+  }
+  button, input { font: inherit; color: inherit; }
+  h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 0 0 10px;
+  }
+
+  /* ---------- Layout: PC = ein Bildschirm ohne Scrollen ---------- */
+  .app {
+    height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-areas: "top top" "stage controls" "tuning controls";
+    gap: 12px;
+    padding: 12px 16px 16px;
+  }
+  .topbar { grid-area: top; }
+  .stage { grid-area: stage; }
+  .controls { grid-area: controls; }
+  .tuning { grid-area: tuning; }
+
+  .card {
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
+  }
+
+  /* ---------- Kopfzeile ---------- */
+  .topbar { display: flex; align-items: center; gap: 10px 14px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 17px; font-weight: 650; margin-right: 4px; }
+  .brand img { width: 28px; height: 28px; border-radius: 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 360px;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+  .chip.ok i { background: var(--ok); box-shadow: 0 0 8px var(--ok); }
+  .chip.warn i { background: var(--warn); }
+  .chip.bad i { background: var(--bad); }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; text-decoration: none; cursor: pointer;
+    padding: 7px 13px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--text); font-weight: 550; white-space: nowrap;
+  }
+  .btn:hover { border-color: #3a3f4b; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #141414; }
+
+  /* ---------- Vorschau ---------- */
+  .stage { display: flex; flex-direction: column; min-height: 0; background: #050506; }
+  .stage-head { display: flex; justify-content: space-between; align-items: baseline; }
+  .hint { color: var(--faint); font-size: 12px; }
+  .canvas-wrap { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ---------- Bedienung rechts ---------- */
+  .controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 14px; }
+  .modes button {
+    padding: 11px 6px; border-radius: 11px; border: 1px solid var(--line); background: var(--panel-2);
+    cursor: pointer; font-weight: 600;
+  }
+  .modes button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #141414; }
+  .modes button[data-mode="off"][aria-pressed="true"] { background: #3a3f4b; border-color: #3a3f4b; color: var(--text); }
+
+  .slider { display: block; }
+  .slider-head { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+  .slider-head span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* Slider komplett selbst gestaltet - Browser zeichnen die Standard-Slider sehr unterschiedlich.
+     --fill (vom Skript gesetzt) bestimmt den farbigen Teil der Spur. */
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 22px; margin: 0; background: transparent; cursor: pointer;
+    --fill: 50%; --track: 6px; --thumb: 18px;
+  }
+  .slider.big input[type="range"] { height: 28px; --track: 10px; --thumb: 24px; }
+  input[type="range"]:focus { outline: none; }
+  input[type="range"]::-webkit-slider-runnable-track {
+    height: var(--track); border-radius: 999px;
+    background: linear-gradient(to right, var(--accent) var(--fill), #2c303a var(--fill));
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: var(--thumb); height: var(--thumb); border-radius: 50%;
+    margin-top: calc((var(--track) - var(--thumb)) / 2);
+    background: #fff; border: 3px solid var(--accent); box-shadow: 0 1px 6px rgba(0, 0, 0, .55);
+  }
+  input[type="range"]::-moz-range-track { height: var(--track); border-radius: 999px; background: #2c303a; }
+  input[type="range"]::-moz-range-progress { height: var(--track); border-radius: 999px; background: var(--accent); }
+  input[type="range"]::-moz-range-thumb {
+    width: calc(var(--thumb) - 6px); height: calc(var(--thumb) - 6px); border-radius: 50%;
+    background: #fff; border: 3px solid var(--accent); box-shadow: 0 1px 6px rgba(0, 0, 0, .55);
+  }
+  input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(255, 122, 24, .35); }
+
+  .swatches { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
+  .swatch {
+    aspect-ratio: 1; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,.25);
+    transition: transform .12s;
+  }
+  .swatch:hover { transform: scale(1.08); }
+  .swatch.active { border-color: var(--text); box-shadow: 0 0 0 3px var(--bg), 0 0 14px var(--glow); }
+  .custom-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; color: var(--muted); font-size: 13px; }
+  .custom-row input[type="color"] {
+    width: 42px; height: 30px; padding: 2px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel-2); cursor: pointer;
+  }
+
+  .scenes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .scene {
+    text-align: left; padding: 9px 11px; border-radius: 11px; border: 1px solid var(--line);
+    background: var(--panel-2); cursor: pointer;
+  }
+  .scene b { display: block; font-weight: 600; }
+  .scene span { color: var(--muted); font-size: 12px; }
+  .scene.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .scene .auto-tag {
+    float: right; font-size: 10px; font-weight: 700; letter-spacing: .05em; color: #141414;
+    background: var(--accent); border-radius: 6px; padding: 1px 5px; display: none;
+  }
+  .scene.active.by-auto .auto-tag { display: inline-block; }
+  .scenes.dim { opacity: .55; }
+
+  /* Schalter */
+  .switch { display: flex; align-items: center; gap: 11px; cursor: pointer; margin-top: 12px; }
+  .switch input {
+    -webkit-appearance: none; appearance: none; flex: none; position: relative; cursor: pointer;
+    width: 40px; height: 24px; margin: 0; border-radius: 999px; background: #2c303a; transition: background .15s;
+  }
+  .switch input::after {
+    content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; transition: transform .15s;
+  }
+  .switch input:checked { background: var(--accent); }
+  .switch input:checked::after { transform: translateX(16px); }
+  .switch b { display: block; font-weight: 600; font-size: 13px; }
+  .switch span { color: var(--muted); font-size: 12px; }
+
+  .monitor-toggles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .monitor-toggles button {
+    padding: 8px 4px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel-2);
+    cursor: pointer; font-size: 13px;
+  }
+  .monitor-toggles button[aria-pressed="true"] { border-color: var(--accent); }
+  .monitor-toggles button[aria-pressed="false"] { color: var(--faint); text-decoration: line-through; }
+  .modes.two { grid-template-columns: 1fr 1fr; margin: 12px 0 0; }
+  .modes.two button { padding: 8px 6px; font-size: 13px; }
+  .sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .sources button {
+    padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel-2);
+    cursor: pointer; font-size: 12.5px; color: var(--muted);
+  }
+  .sources button.active { border-color: var(--accent); color: var(--text); }
+
+  /* ---------- Feineinstellungen ---------- */
+  .tuning-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 22px; }
+  .tuning-grid h2 { grid-column: 1 / -1; margin: 0; }
+  .tuning-grid h2:not(:first-child) { margin-top: 4px; }
+  .tuning-grid h2 em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--faint); font-weight: 500; }
+
+  /* ---------- Handy-Dialog ---------- */
+  dialog {
+    border: 1px solid var(--line); border-radius: 18px; background: var(--panel); color: var(--text);
+    padding: 22px; max-width: 640px; text-align: center;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; text-align: center; }
+  dialog .step { background: var(--panel-2); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+  dialog .step b { display: block; margin-bottom: 10px; }
+  dialog .qr { background: #fff; border-radius: 12px; padding: 6px; display: inline-block; }
+  dialog .qr svg { display: block; width: 190px; height: 190px; }
+  dialog .url { font-family: ui-monospace, Consolas, monospace; margin: 10px 0 4px; font-size: 12.5px; word-break: break-all; }
+  dialog p { color: var(--muted); font-size: 12.5px; margin: 6px 0; }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    background: #3a1d1d; border: 1px solid var(--bad); color: #ffd0d0;
+    padding: 8px 14px; border-radius: 10px; font-size: 13px; display: none;
+  }
+
+  /* ---------- Handy / schmale Fenster ---------- */
+  /* Die Klasse "phone" setzt das Skript (schmales Fenster oder Touch-Handy) - eine reine
+     Media-Query greift nicht, wenn Chrome die Seite als "Desktopwebsite" mit ~980 px Breite zeigt */
+  html.phone .app {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-template-areas: "top" "controls" "stage" "tuning";
+    align-content: start;
+    padding: max(10px, env(safe-area-inset-top)) 12px max(16px, env(safe-area-inset-bottom));
+  }
+  html.phone .controls { overflow: visible; }
+  html.phone .canvas-wrap { flex: none; aspect-ratio: 2.3; max-height: 280px; }
+  html.phone .tuning-grid { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  html.phone .modes button { padding: 14px 6px; }
+  html.phone .swatches { gap: 10px; }
+  html.phone .chip { max-width: 100%; }
+  html.phone .actions { margin-left: 0; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="brand"><img src="/icon.svg" alt=""><span>Monitor Ambilight</span></div>
+    <span class="chip" id="pc-chip"><i></i><span id="pc-text">verbinde ...</span></span>
+    <span class="chip" id="wled-chip"><i></i><span id="wled-text">WLED wird gesucht ...</span></span>
+    <div class="actions">
+      <button class="btn" id="phone-btn" type="button">Aufs Handy</button>
+      <a class="btn primary" id="wled-link" href="#" target="_blank" rel="noopener">WLED öffnen ↗</a>
+    </div>
+  </header>
+
+  <section class="card stage">
+    <div class="stage-head"><h2>Live-Vorschau</h2><span class="hint">Monitor antippen = an / aus</span></div>
+    <div class="canvas-wrap" id="canvas-wrap"><canvas id="preview"></canvas></div>
+  </section>
+
+  <aside class="controls">
+    <section class="card">
+      <div class="modes" id="modes">
+        <button type="button" data-mode="ambilight">Ambilight</button>
+        <button type="button" data-mode="color">Farbe</button>
+        <button type="button" data-mode="off">Aus</button>
+      </div>
+      <label class="slider big">
+        <div class="slider-head"><span>Helligkeit</span><span id="brightness-val"></span></div>
+        <input type="range" id="brightness" min="0" max="100" step="1">
+      </label>
+    </section>
+
+    <section class="card">
+      <h2>Feste Farbe – antippen</h2>
+      <div class="swatches" id="swatches"></div>
+      <label class="custom-row">
+        <input type="color" id="color"> <span>Eigene Farbe wählen</span>
+      </label>
+    </section>
+
+    <section class="card">
+      <h2>Szenen</h2>
+      <div class="scenes" id="scenes"></div>
+      <label class="switch">
+        <input type="checkbox" id="auto_scene">
+        <div><b>Auto-Szene</b><span id="auto-text">Spiele → Gaming, Videos → Film</span></div>
+      </label>
+    </section>
+
+    <section class="card">
+      <h2>Monitore</h2>
+      <div class="monitor-toggles" id="monitors"></div>
+      <div class="modes two" id="layout-modes">
+        <button type="button" data-spread="false">Jeder für sich</button>
+        <button type="button" data-spread="true">Aktiver für alle</button>
+      </div>
+      <div class="sources hidden" id="sources"></div>
+      <label class="switch">
+        <input type="checkbox" id="hide_taskbar">
+        <div><b>Taskleiste ignorieren</b><span>außer im Vollbild</span></div>
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="off_when_pc_off">
+        <div><b>Licht aus, wenn PC aus</b><span>auch bei Standby oder wenn das Programm endet</span></div>
+      </label>
+    </section>
+  </aside>
+
+  <section class="card tuning">
+    <div class="tuning-grid" id="tuning"></div>
+  </section>
+</div>
+
+<dialog id="phone-dialog">
+  <h2>Als App aufs Handy</h2>
+  <div class="steps">
+    <div class="step">
+      <b>1 · Einmalig: Zertifikat</b>
+      <div class="qr" id="ca-qr"></div>
+      <div class="url" id="ca-url"></div>
+      <p>Scannen, Datei laden. Dann in den Einstellungen nach <i>„Zertifikat installieren“</i> suchen → <i>CA-Zertifikat</i> → <i>ambilight-ca.crt</i> wählen.</p>
+    </div>
+    <div class="step">
+      <b>2 · App öffnen</b>
+      <div class="qr" id="app-qr"></div>
+      <div class="url" id="app-url"></div>
+      <p>In Chrome öffnen → Menü ⋮ → <i>„App installieren“</i>.</p>
+    </div>
+  </div>
+  <p>Das Handy muss im selben WLAN sein.</p>
+  <form method="dialog"><button class="btn" style="margin-top:6px">Schließen</button></form>
+</dialog>
+<div id="toast"></div>
+
+<script>
+const SWATCHES = [
+  "#ff2a1a", "#ff7a18", "#ffb46b", "#ffd60a", "#30d158", "#2ee6c8",
+  "#64d2ff", "#0a84ff", "#5e5cff", "#bf5af2", "#ff2dbe", "#ffffff",
+];
+// Werte der Szenen kommen vom PC-Programm (state.scenes), hier nur Name und Reihenfolge
+const SCENES = [
+  { key: "gaming", name: "Gaming" },
+  { key: "film", name: "Film" },
+  { key: "relax", name: "Entspannt" },
+  { key: "custom", name: "Eigene" },
+];
+const TUNING_GROUPS = [
+  {
+    title: "Dynamik", note: "– gehört zur Szene, Ändern macht daraus „Eigene“", items: [
+      { id: "smoothing", label: "Glättung", min: 0, max: 0.95, step: 0.05, fmt: v => Math.round(v * 100) + " %" },
+      { id: "depth", label: "Erfassungstiefe ins Bild", min: 2, max: 50, step: 1, fmt: v => v + " %" },
+      { id: "fps", label: "Bilder pro Sekunde", min: 5, max: 60, step: 1, fmt: v => v },
+    ],
+  },
+  {
+    title: "Farbe", note: "– gilt für alle Szenen", items: [
+      { id: "vivid", label: "Bunte Pixel bevorzugen", min: 0, max: 100, step: 5, fmt: v => v + " %" },
+      { id: "white_cut", label: "Weiß reduzieren", min: 0, max: 100, step: 5, fmt: v => v + " %" },
+      { id: "gamma", label: "Dunkle Töne absenken", min: 1, max: 3, step: 0.1, fmt: v => Number(v).toFixed(1) },
+    ],
+  },
+];
+const TUNING = TUNING_GROUPS.flatMap(g => g.items);
+const SLIDERS = [{ id: "brightness", fmt: v => v + " %" }, ...TUNING];
+const SWITCHES = ["auto_scene", "off_when_pc_off", "hide_taskbar"];
+
+const $ = id => document.getElementById(id);
+
+// Handy-Layout: schmales Fenster oder Touch-Geraet mit schmalem Bildschirm. Zeigt Chrome die Seite
+// als "Desktopwebsite" (Layout ~980 px breit, alles winzig), gleicht zoom das wieder aus.
+function updatePhoneLayout() {
+  const root = document.documentElement;
+  const touchPhone = matchMedia("(pointer: coarse)").matches && Math.min(screen.width, screen.height) <= 600;
+  const desktopSite = touchPhone && innerWidth > screen.width * 1.3;
+  root.classList.toggle("phone", innerWidth <= 860 || touchPhone);
+  root.style.zoom = desktopSite ? String(innerWidth / screen.width) : "";
+}
+updatePhoneLayout();
+addEventListener("resize", updatePhoneLayout);
+
+// Zoom-Gesten auch dort abfangen, wo der Browser touch-action/viewport ignoriert (Safari, Desktop-Modus)
+document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
+document.addEventListener("gesturestart", e => e.preventDefault(), { passive: false });
+document.addEventListener("touchmove", e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
+const canvas = $("preview");
+const ctx = canvas.getContext("2d");
+const glow = document.createElement("canvas");  // LEDs fuer den Leuchtschein, wird als Ganzes weichgezeichnet
+const glowCtx = glow.getContext("2d");
+const canFilter = "filter" in ctx;
+let layout = [];
+let state = null;
+let colors = {};     // LED-Farben je Monitor, kommen per Stream im Takt der LEDs
+let drawPending = false;
+let editing = null;  // Slider, den der Nutzer gerade zieht - nicht vom Polling ueberschreiben
+let hits = [];       // Monitor-Rechtecke der letzten Zeichnung, fuer Klicks auf die Vorschau
+let view = { w: 0, h: 0 };
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.display = msg ? "block" : "none";
+}
+
+async function change(update) {
+  try {
+    state = await api("/api/settings", update);
+    toast("");
+    render();
+  } catch (err) {
+    toast("Fehler: " + err.message);
+  }
+}
+
+const isOn = name => state?.settings.monitors[name] !== false;
+
+// Farbiger Teil der Slider-Spur bis zum aktuellen Wert
+function setFill(el) {
+  const pct = (el.value - el.min) / (el.max - el.min) * 100;
+  el.style.setProperty("--fill", pct + "%");
+}
+const toggleMonitor = name => change({ monitors: { [name]: !isOn(name) } });
+
+/* ---------- Vorschau ---------- */
+function resizeCanvas() {
+  const r = $("canvas-wrap").getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  view = { w: r.width, h: r.height };
+  glow.width = canvas.width = Math.round(r.width * dpr);
+  glow.height = canvas.height = Math.round(r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  glowCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+
+// Hoechstens einmal pro Bildschirm-Frame zeichnen, egal wie oft Daten kommen
+function scheduleDraw() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(() => { drawPending = false; draw(); });
+}
+
+function draw() {
+  if (!layout.length || !view.w) return;
+  const pad = 16;
+  const minX = Math.min(...layout.map(m => m.pos[0]));
+  const minY = Math.min(...layout.map(m => m.pos[1]));
+  const maxX = Math.max(...layout.map(m => m.pos[0] + m.size[0]));
+  const maxY = Math.max(...layout.map(m => m.pos[1] + m.size[1]));
+  const scale = Math.min((view.w - 2 * pad) / (maxX - minX), (view.h - 2 * pad) / (maxY - minY));
+  const offX = (view.w - (maxX - minX) * scale) / 2;
+  const offY = (view.h - (maxY - minY) * scale) / 2;
+  const inset = Math.max(4, 2560 * scale * 0.03);
+
+  ctx.clearRect(0, 0, view.w, view.h);
+  glowCtx.clearRect(0, 0, view.w, view.h);
+  hits = [];
+  const boxes = [];
+  let blur = 0;
+  for (const mon of layout) {
+    const x = offX + (mon.pos[0] - minX) * scale + inset;
+    const y = offY + (mon.pos[1] - minY) * scale + inset;
+    const w = mon.size[0] * scale - 2 * inset;
+    const h = mon.size[1] * scale - 2 * inset;
+    const on = isOn(mon.name);
+    const leds = colors[mon.name] || [];
+    const r = Math.max(1.3, Math.min(3.2, w / 95));
+    const gap = r * 2.2 + 1;
+    hits.push({ name: mon.name, x: x - gap, y: y - gap, w: w + 2 * gap, h: h + 2 * gap });
+    boxes.push({ mon, x, y, w, h, on });
+    if (on) blur = Math.max(blur, r * 3);
+
+    // Leuchtende LEDs auf die Glow-Ebene, ausgeschaltete nur als graue Punkte direkt
+    const target = on ? glowCtx : ctx;
+    mon.leds.forEach(([px, py], i) => {
+      const lx = x + px * w + (px === 0 ? -gap : px === 1 ? gap : 0);
+      const ly = y + py * h + (py === 0 ? -gap : py === 1 ? gap : 0);
+      target.fillStyle = on ? leds[i] || "#000000" : "#262a33";
+      target.beginPath();
+      target.arc(lx, ly, r, 0, Math.PI * 2);
+      target.fill();
+    });
+  }
+
+  // Leuchtschein: ein Weichzeichner-Durchgang fuer alle LEDs (statt Schatten je LED), darueber scharf
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (canFilter && blur) {
+    ctx.filter = `blur(${blur * (window.devicePixelRatio || 1)}px)`;
+    ctx.drawImage(glow, 0, 0);
+    ctx.filter = "none";
+  }
+  ctx.drawImage(glow, 0, 0);
+  ctx.restore();
+
+  for (const { mon, x, y, w, h, on } of boxes) {
+    ctx.fillStyle = on ? "#16181d" : "#0d0e11";
+    const isSource = state?.spread_source === mon.name;  // liefert bei "Aktiver für alle" das Bild
+    ctx.strokeStyle = isSource ? "#ff7a18" : on ? "#30343e" : "#1f2228";
+    ctx.lineWidth = isSource ? 2 : 1;
+    ctx.setLineDash(on ? [] : [5, 4]);
+    ctx.beginPath();
+    ctx.roundRect(x, y, w, h, Math.min(8, w / 20));
+    ctx.fill();
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const fs = Math.max(10, Math.min(16, w / 11));
+    ctx.fillStyle = on ? "#9aa0ab" : "#474c56";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `600 ${fs}px system-ui, Segoe UI, sans-serif`;
+    ctx.fillText(mon.name, x + w / 2, y + h / 2 - fs * 0.55);
+    ctx.font = `${fs * 0.78}px system-ui, Segoe UI, sans-serif`;
+    const noSignal = on && state?.missing?.includes(mon.name);
+    ctx.fillText(!on ? "aus" : noSignal ? "kein Signal" : `${mon.leds.length} LEDs`, x + w / 2, y + h / 2 + fs * 0.65);
+  }
+}
+
+function hitAt(event) {
+  const r = canvas.getBoundingClientRect();
+  const cx = event.clientX - r.left, cy = event.clientY - r.top;
+  return hits.find(m => cx >= m.x && cx <= m.x + m.w && cy >= m.y && cy <= m.y + m.h);
+}
+
+/* ---------- Zustand anzeigen ---------- */
+function render() {
+  if (!state) return;
+  const s = state.settings;
+
+  document.querySelectorAll("#modes button").forEach(b => b.setAttribute("aria-pressed", b.dataset.mode === s.mode));
+  document.querySelectorAll(".swatch").forEach(b => b.classList.toggle("active", s.mode === "color" && b.dataset.color === s.color));
+  if (document.activeElement !== $("color")) $("color").value = s.color;
+  // Szenen: aktive markieren, Werte als Untertitel; "AUTO", wenn die Auto-Szene sie gesetzt hat
+  const byAuto = s.auto_scene && s.scene !== s.base_scene;
+  document.querySelectorAll(".scene").forEach(b => {
+    const key = b.dataset.scene;
+    const v = key === "custom" ? s.custom : state.scenes[key];
+    b.classList.toggle("active", s.scene === key);
+    b.classList.toggle("by-auto", byAuto);
+    b.querySelector("span").textContent = `${v.fps} fps · ${Math.round(v.smoothing * 100)} % Glättung`;
+  });
+  $("scenes").classList.toggle("dim", s.mode !== "ambilight");
+  for (const id of SWITCHES) $(id).checked = s[id];
+  // Darstellung: jeder Monitor fuer sich oder der aktive fuer alle (mit Wahl des Monitors)
+  document.querySelectorAll("#layout-modes button").forEach(b => b.setAttribute("aria-pressed", String(s.spread) === b.dataset.spread));
+  $("sources").classList.toggle("hidden", !s.spread);
+  document.querySelectorAll("#sources button").forEach(b => {
+    b.classList.toggle("active", s.spread_source === b.dataset.source);
+    if (b.dataset.source === "auto") b.textContent = `Auto (aktives Fenster${state.spread_source ? ": " + state.spread_source : ""})`;
+  });
+  const fg = state.foreground;
+  $("auto-text").textContent = !s.auto_scene ? "Spiele → Gaming, Videos → Film"
+    : fg.kind === "game" ? `Spiel erkannt: ${fg.app}`
+    : fg.kind === "video" ? `Video erkannt: ${fg.app}`
+    : "kein Spiel/Video – deine Szene";
+
+  for (const { id, fmt } of SLIDERS) {
+    if (editing !== id) $(id).value = s[id];
+    setFill($(id));
+    $(id + "-val").textContent = fmt(editing === id ? $(id).value : s[id]);
+  }
+  document.querySelectorAll("#monitors button").forEach(b => b.setAttribute("aria-pressed", isOn(b.dataset.name)));
+
+  const sending = state.status.startsWith("sendet");
+  $("pc-chip").className = "chip " + (sending ? "ok" : "warn");
+  $("pc-text").textContent = sending ? `PC sendet · ${state.fps} fps` + (state.status.includes("Aufnahme") ? " · " + state.status.split("· ").pop() : "") : state.status;
+  $("pc-chip").title = state.status;
+
+  const wled = state.wled;
+  $("wled-chip").className = "chip " + (wled.online ? "ok" : "bad");
+  $("wled-text").textContent = wled.online ? `WLED online · ${wled.leds} LEDs` : "WLED nicht erreichbar";
+  $("wled-chip").title = wled.online ? `${wled.name} · v${wled.version} · ${wled.url}` : "";
+  $("wled-link").href = wled.url;
+  scheduleDraw();
+}
+
+// Status und Einstellungen; die LED-Farben kommen getrennt und schneller ueber stream()
+async function poll() {
+  try {
+    state = await api("/api/state");
+    render();
+  } catch {
+    $("pc-chip").className = "chip bad";
+    $("pc-text").textContent = "PC-Programm nicht erreichbar";
+  }
+  setTimeout(poll, 250);
+}
+
+// Jedes Frame, das an die LEDs geht, kommt sofort als Hex-String (6 Zeichen je LED, Reihenfolge
+// wie im Layout). EventSource verbindet sich nach Abbruechen selbst neu.
+function stream() {
+  new EventSource("/api/stream").onmessage = e => {
+    const hex = e.data;
+    let pos = 0;
+    for (const mon of layout) {
+      const leds = colors[mon.name] = new Array(mon.leds.length);
+      for (let i = 0; i < leds.length; i++, pos += 6) leds[i] = "#" + hex.substr(pos, 6);
+    }
+    scheduleDraw();
+  };
+}
+
+/* ---------- Aufbau ---------- */
+function slider(id, label) {
+  const wrap = document.createElement("label");
+  wrap.className = "slider";
+  wrap.innerHTML = `<div class="slider-head"><span>${label}</span><span id="${id}-val"></span></div>`;
+  return wrap;
+}
+
+async function init() {
+  document.querySelectorAll("#modes button").forEach(b => b.addEventListener("click", () => change({ mode: b.dataset.mode })));
+
+  for (const c of SWATCHES) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "swatch";
+    b.dataset.color = c;
+    b.style.background = c;
+    b.style.setProperty("--glow", c);
+    b.title = c;
+    b.addEventListener("click", () => change({ mode: "color", color: c }));
+    $("swatches").append(b);
+  }
+  $("color").addEventListener("input", e => change({ mode: "color", color: e.target.value }));
+
+  SCENES.forEach(sc => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "scene";
+    b.dataset.scene = sc.key;
+    b.innerHTML = `<b>${sc.name}<em class="auto-tag">AUTO</em></b><span></span>`;
+    b.addEventListener("click", () => change({ scene: sc.key }));
+    $("scenes").append(b);
+  });
+  for (const id of SWITCHES) $(id).addEventListener("change", e => change({ [id]: e.target.checked }));
+
+  for (const group of TUNING_GROUPS) {
+    const head = document.createElement("h2");
+    head.innerHTML = `${group.title} <em>${group.note}</em>`;
+    $("tuning").append(head);
+    for (const t of group.items) {
+      const wrap = slider(t.id, t.label);
+      const input = document.createElement("input");
+      Object.assign(input, { type: "range", id: t.id, min: t.min, max: t.max, step: t.step });
+      wrap.append(input);
+      $("tuning").append(wrap);
+    }
+  }
+  for (const { id } of SLIDERS) {
+    const el = $(id);
+    el.addEventListener("pointerdown", () => editing = id);
+    el.addEventListener("input", () => { editing = id; setFill(el); change({ [id]: Number(el.value) }); });
+    el.addEventListener("change", () => editing = null);
+  }
+
+  // Auf dem Handy selbst braucht es den QR-Code nicht
+  if (!["localhost", "127.0.0.1"].includes(location.hostname)) $("phone-btn").style.display = "none";
+  $("phone-btn").addEventListener("click", async () => {
+    try {
+      const info = await api("/api/phone");
+      $("ca-qr").innerHTML = info.ca_qr;
+      $("ca-url").textContent = info.ca_url;
+      $("app-qr").innerHTML = info.app_qr;
+      $("app-url").textContent = info.app_url;
+      $("phone-dialog").showModal();
+    } catch (err) {
+      toast("Handy-Zugriff aus: " + err.message);
+    }
+  });
+
+  layout = await api("/api/layout");
+  for (const mon of layout) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.name = mon.name;
+    b.textContent = mon.name;
+    b.addEventListener("click", () => toggleMonitor(mon.name));
+    $("monitors").append(b);
+  }
+  document.querySelectorAll("#layout-modes button").forEach(b =>
+    b.addEventListener("click", () => change({ spread: b.dataset.spread === "true" })));
+  for (const source of ["auto", ...layout.map(m => m.name)]) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.source = source;
+    b.textContent = source;
+    b.addEventListener("click", () => change({ spread: true, spread_source: source }));
+    $("sources").append(b);
+  }
+  canvas.addEventListener("click", e => { const m = hitAt(e); if (m) toggleMonitor(m.name); });
+  canvas.addEventListener("mousemove", e => { canvas.style.cursor = hitAt(e) ? "pointer" : "default"; });
+  new ResizeObserver(resizeCanvas).observe($("canvas-wrap"));
+  resizeCanvas();
+  poll();
+  stream();
+}
+
+init();
+
+// Service Worker macht die Seite als App installierbar (nur in "sicherem Kontext": localhost/HTTPS
+// oder per Chrome-Flag freigegebene Adresse)
+if ("serviceWorker" in navigator && window.isSecureContext) navigator.serviceWorker.register("/sw.js");
+</script>
+</body>
+</html>

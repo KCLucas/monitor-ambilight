@@ -5,6 +5,12 @@ wled_cfg*.json
 *.pem
 *.key
 
+# Zertifikate fuers Heimnetz-HTTPS - enthalten private Schluessel
+certs/
+
+# Einstellungen aus der Weboberflaeche - lokaler Zustand
+settings.json
+
 # PlatformIO / Arduino - Build-Ausgaben
 .pio/
 build/

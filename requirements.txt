@@ -1,0 +1,5 @@
+# dxcam fest: tools/capture.py liest fuer weniger CPU-Last direkt aus dxcam-Interna
+dxcam==0.3.0
+numpy
+segno
+cryptography
