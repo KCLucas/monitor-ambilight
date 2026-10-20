@@ -30,12 +30,14 @@ from capture import CaptureProcess, open_outputs
 from certs import ensure_certs
 from foreground import snapshot as foreground_snapshot
 from foreground import taskbar_insets
+from party import AudioListener, PartyEffect
 from web import serve
 
 ROOT = Path(__file__).resolve().parent.parent
 DDP_PORT = 4048
 DDP_MAX_DATA = 1440  # WLED nimmt pro DDP-Paket hoechstens 480 RGB-LEDs an
-MODES = ("ambilight", "color", "off")
+MODES = ("ambilight", "color", "off", "party")
+PARTY_FPS = 50  # Party-Modus: Flashes und Laser brauchen mehr Bilder pro Sekunde als ruhiges Ambilight
 # "Weiss reduzieren" nach Kanalabstand (hoechster minus niedrigster Kanal) gestaffelt:
 # bis NEUTRAL_CHROMA gilt eine Farbe als Weiss/Grau und bleibt unveraendert, ab TINTED_CHROMA voll
 NEUTRAL_CHROMA = 16
@@ -197,6 +199,8 @@ class Engine:
         # Aufnahme laeuft im Unterprozess; liefert Name, LED-Zahl und Vorschau-Layout je Monitor
         self.capture = CaptureProcess(cfg)
         self.monitors = self.capture.layout
+        self.party = PartyEffect(self.monitors)
+        self.audio = None  # hoert die Musik nur mit, solange der Party-Modus an ist
 
         self.lock = threading.Lock()
         self.output = np.zeros((sum(m["count"] for m in self.monitors), 3), dtype=np.float32)
@@ -234,7 +238,15 @@ class Engine:
             "missing": list(self.capture.missing),
             "spread_source": self._spread_source(settings),
             "alert": self.alert and {"style": self.alert["style"], "color": self.alert["color"]},
+            "party": self._party_info(settings),
         }
+
+    def _party_info(self, settings):
+        if settings["mode"] != "party" or not self.audio:
+            return None
+        levels = self.audio.levels()
+        return {"bpm": round(levels["bpm"]) if 70 < levels["bpm"] < 200 else None,
+                "playing": time.monotonic() - levels["heard"] < 0.6, "error": self.audio.error}
 
     def set_alert(self, data):
         """Hinweis-Licht an ({"color": "#ff0000", "style": "pulse", "seconds": 600}) oder aus ({"off": true}).
@@ -396,6 +408,9 @@ class Engine:
         names = {m["name"] for m in self.monitors}
         with self.lock:
             old = self.settings
+            if changes.get("party") is False:
+                # "Party aus": zurueck zu dem, was vorher lief
+                changes = dict(changes, mode=old.get("before_party") or "ambilight")
             new = clean_settings(changes, old, names)
             if "scene" in changes:
                 # Szene gewaehlt: ihre Werte uebernehmen und auf Ambilight schalten
@@ -408,6 +423,8 @@ class Engine:
                 new["custom"] = {key: new[key] for key in SCENE_KEYS}
             if new["auto_scene"] and not old["auto_scene"]:
                 self.auto_reset = True  # sofort fuer das bewerten, was gerade laeuft
+            if new["mode"] == "party" and old["mode"] != "party":
+                new["before_party"] = old["mode"]
             self.settings = new
             self._save()
         if new["off_when_pc_off"] != old["off_when_pc_off"]:
@@ -481,6 +498,10 @@ class Engine:
         elif settings["mode"] == "color":
             rgb = [int(settings["color"][i : i + 2], 16) for i in (1, 3, 5)]
             current = np.tile(np.array(rgb, dtype=np.float32), (len(captured), 1))
+        elif settings["mode"] == "party":
+            if self.audio is None:
+                self.audio = AudioListener()
+            current = self.party.frame(self.audio)
         else:
             return np.zeros_like(captured)
         start = 0
@@ -520,9 +541,14 @@ class Engine:
                 output = np.clip(current, 0, 255)
                 smoothed[:] = np.clip(current * 100 / max(1, settings["brightness"]), 0, 255)
             else:
+                if settings["mode"] != "party" and self.audio:
+                    self.audio.stop()  # Musik nicht mehr mithoeren
+                    self.audio = None
                 current = self._target(settings, captured)
-                # Glaettung gegen Flackern: Anteil der alten Farbe, der pro Frame erhalten bleibt
-                smoothed += (current - smoothed) * (1 - settings["smoothing"])
+                # Glaettung gegen Flackern: Anteil der alten Farbe, der pro Frame erhalten bleibt.
+                # Party: ungeglaettet - Beats muessen knallen
+                smoothing = 0.0 if settings["mode"] == "party" else settings["smoothing"]
+                smoothed += (current - smoothed) * (1 - smoothing)
                 output = np.clip(smoothed * settings["brightness"] / 100, 0, 255)
             if self.sender:
                 # Bildschirmwerte sind gamma-kodiert, LEDs leuchten linear: ohne Korrektur glimmt
@@ -540,7 +566,8 @@ class Engine:
             with self.frame:
                 self.frame_id, self.frame_hex = self.frame_id + 1, frame_hex
                 self.frame.notify_all()
-            time.sleep(max(0.0, 1 / settings["fps"] - (time.perf_counter() - started)))
+            fps = max(settings["fps"], PARTY_FPS) if settings["mode"] == "party" else settings["fps"]
+            time.sleep(max(0.0, 1 / fps - (time.perf_counter() - started)))
 
 
 def lan_ip():

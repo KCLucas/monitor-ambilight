@@ -97,7 +97,11 @@
 
   /* ---------- Bedienung rechts ---------- */
   .controls { display: flex; flex-direction: column; gap: 12px; min-height: 0; overflow-y: auto; }
-  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-bottom: 14px; }
+  .modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 14px; }
+  .modes button[data-mode="party"][aria-pressed="true"] {
+    background: linear-gradient(90deg, #ff00c8, #7a00ff, #00e6ff); background-size: 300% 100%; border-color: transparent;
+    color: #fff; animation: rave 1.2s linear infinite; }
+  @keyframes rave { to { background-position: 300% 0; } }
   .modes button {
     padding: 11px 6px; border-radius: 11px; border: 1px solid var(--line); background: var(--panel-2);
     cursor: pointer; font-weight: 600;
@@ -264,6 +268,7 @@
         <button type="button" data-mode="ambilight">Ambilight</button>
         <button type="button" data-mode="color">Farbe</button>
         <button type="button" data-mode="off">Aus</button>
+        <button type="button" data-mode="party" title="Licht im Takt der Musik (Wave-Link-Kanal Music)">Party</button>
       </div>
       <label class="slider big">
         <div class="slider-head"><span>Helligkeit</span><span id="brightness-val"></span></div>

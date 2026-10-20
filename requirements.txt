@@ -3,3 +3,5 @@ dxcam==0.3.0
 numpy
 segno
 cryptography
+# Party-Modus: Musik per WASAPI-Loopback mithoeren
+PyAudioWPatch
