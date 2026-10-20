@@ -117,11 +117,29 @@ class AudioListener:
 
 
 class PartyEffect:
+    """Malt auf die ganze Monitorwand als eine Flaeche: jede LED hat ihre echte Position (Monitor-Position +
+    Lage am Rand), Effekte laufen ueber Monitorgrenzen hinweg - wo zwei Monitore aneinanderstossen, passt es."""
+
     def __init__(self, monitors):
-        self.monitors = monitors  # [{"name", "count"}, ...] in Streifen-Reihenfolge
+        self.monitors = monitors  # Layout aus der Aufnahme: name, count, pos, size, leds (0..1 am Monitorrand)
+        xy = []
+        for m in monitors:
+            leds = np.array(m.get("leds") or [[i / max(1, m["count"]), 0.5] for i in range(m["count"])], np.float32)
+            pos, size = np.array(m.get("pos", [0, 0]), np.float32), np.array(m.get("size", [1, 1]), np.float32)
+            xy.append(pos + leds[: m["count"]] * size)
+        xy = np.concatenate(xy) if xy else np.zeros((0, 2), np.float32)
+        low, high = xy.min(axis=0), xy.max(axis=0)
+        center, half = (low + high) / 2, np.maximum((high - low) / 2, 1)
+        rel = (xy - center) / half.max()                     # Mitte der Wand = 0, Rand ~ 1
+        self.angle = np.arctan2(rel[:, 1], rel[:, 0])        # fuer den rotierenden Laserfaecher
+        self.radius = np.hypot(rel[:, 0], rel[:, 1])          # fuer die Druckwelle
+        self.x = (xy[:, 0] - low[0]) / max(1, high[0] - low[0])  # 0 = links aussen, 1 = rechts aussen
+        self.total = len(xy)
         self.phase = 0.0
         self.last = time.monotonic()
         self.flash = 0.0
+        self.waves = deque(maxlen=6)  # (Startzeit, Farbe, Staerke) - eine Druckwelle pro Beat
+        self.sweep = None             # (Startzeit, Dauer, Farbe) - alle 4 Beats einmal quer ueber die Wand
         self.seen_beats = 0
         self.direction = 1
         self.rng = np.random.default_rng()
@@ -130,57 +148,64 @@ class PartyEffect:
         now = time.monotonic()
         dt = min(0.1, now - self.last)
         self.last = now
-        total = sum(m["count"] for m in self.monitors)
-        out = np.zeros((total, 3), np.float32)
         a = audio.levels() if audio else None
         playing = bool(a and now - a["heard"] < SILENCE)
 
         if not playing:
-            # Pause: langsames Farbwabern rund um die Monitore
-            self.phase += dt * 0.05
-            start = 0
-            for m in self.monitors:
-                pos = (np.arange(m["count"]) / max(1, m["count"]) + self.phase) % 1
-                hue = np.stack([np.sin(2 * np.pi * (pos + k / 3)) for k in range(3)], axis=1) * 0.5 + 0.5
-                out[start:start + m["count"]] = hue * 70
-                start += m["count"]
-            return out
+            # Pause: ein Regenbogen zieht langsam quer ueber die ganze Wand
+            self.phase += dt * 0.04
+            hue = (self.x * 0.8 + self.phase) % 1
+            return np.stack([np.sin(2 * np.pi * (hue + k / 3)) for k in range(3)], axis=1) * 35 + 35
 
+        bpm = a["bpm"] if 70 < a["bpm"] < 200 else 128
+        beat_len = 60 / bpm
         beats = a["beats"]
-        new_beat = beats != self.seen_beats
-        if new_beat:
-            self.seen_beats = beats
-            self.flash = 0.55 + 0.45 * a["strength"]
-            if beats % 8 == 0:
-                self.direction *= -1
         palette = PALETTES[(beats // 16) % len(PALETTES)]
         laser1, laser2, base = (np.array(c, np.float32) for c in palette)
+        if beats != self.seen_beats:
+            self.seen_beats = beats
+            self.waves.append((now, laser1 if beats % 2 else laser2, 0.6 + 0.4 * a["strength"]))
+            self.flash = 0.45 * a["strength"] if a["strength"] > 0.6 else 0.0  # nur harte Kicks blitzen alles
+            if beats % 4 == 0:
+                self.sweep = (now, beat_len, laser2)
+            if beats % 8 == 0:
+                self.direction *= -1
 
-        # Laser kreisen: eine Runde in 4 Beats (bei unbekanntem Tempo ~128 BPM)
-        bpm = a["bpm"] if 70 < a["bpm"] < 200 else 128
-        self.phase += self.direction * dt * bpm / 60 / 4
-        beams = 3 if a["mid"] > 0.5 else 2
-        width = 0.025 + 0.02 * a["bass"]
+        # Grundton pumpt mit dem Bass
+        out = np.tile(base * (0.15 + 0.6 * a["bass"] ** 2), (self.total, 1))
 
-        start = 0
-        for m in self.monitors:
-            n = m["count"]
-            pos = np.arange(n) / max(1, n)
-            seg = base * (0.15 + 0.6 * a["bass"] ** 2) * np.ones((n, 1), np.float32)  # Bass-Pumpe
-            for k in range(beams):
-                center = (self.phase + k / beams) % 1
-                dist = np.minimum(np.abs(pos - center), 1 - np.abs(pos - center))
-                beam = np.exp(-(dist / width) ** 2)[:, None]
-                color = laser1 if k % 2 == 0 else laser2
-                seg = np.maximum(seg, beam * color * (0.55 + 0.45 * a["mid"]))
-            out[start:start + n] = seg
-            start += n
+        # Laserfaecher dreht sich um die Mitte der Wand: eine Umdrehung in 4 Beats
+        self.phase += self.direction * dt / (4 * beat_len)
+        beams = 4 if a["mid"] > 0.5 else 3
+        width = 0.07 + 0.06 * a["bass"]
+        for k in range(beams):
+            diff = np.angle(np.exp(1j * (self.angle - 2 * np.pi * (self.phase + k / beams))))
+            beam = np.exp(-(diff / width) ** 2)[:, None]
+            out = np.maximum(out, beam * (laser1 if k % 2 == 0 else laser2) * (0.5 + 0.5 * a["mid"]))
 
-        # Beat-Flash ueber alles, klingt in ~150 ms ab
+        # Druckwelle: auf jeden Beat ein Ring, der von der Mitte nach aussen laeuft (~1 Beat bis zum Rand)
+        for started, color, strength in self.waves:
+            age = now - started
+            ring = age / beat_len * 1.3
+            if ring > 1.6:
+                continue
+            wave = np.exp(-((self.radius - ring) / 0.12) ** 2) * strength * max(0.0, 1 - age / (1.5 * beat_len))
+            out = np.maximum(out, wave[:, None] * color)
+
+        # Alle 4 Beats faehrt ein Balken von links nach rechts ueber alle Monitore
+        if self.sweep:
+            started, length, color = self.sweep
+            front = (now - started) / length
+            if front > 1.3:
+                self.sweep = None
+            else:
+                band = np.exp(-((self.x - front) / 0.06) ** 2)
+                out = np.maximum(out, band[:, None] * color)
+
         if self.flash > 0.02:
             out = np.maximum(out, laser1 * self.flash)
-            self.flash *= np.exp(-dt / 0.06)
+            self.flash *= np.exp(-dt / 0.05)
         # Hi-Hats: einzelne LEDs blitzen weiss
-        sparks = self.rng.random(total) < a["high"] ** 3 * 0.06
+        sparks = self.rng.random(self.total) < a["high"] ** 3 * 0.06
         out[sparks] = 255
         return np.clip(out, 0, 255)
