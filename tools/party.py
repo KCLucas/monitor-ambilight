@@ -127,8 +127,10 @@ class AudioListener:
             gap = now - state["last_beat"] if state["last_beat"] else 99
             regular = float(np.mean([any(abs(iv - k * expected) < 0.2 * k * expected for k in (0.5, 1, 2))
                                      for iv in recent])) if len(recent) >= 4 else 0.0
-            target_drive = 0.0 if gap > 2 * expected else regular
-            tau = 1.5 if target_drive > state["drive"] else 2.0
+            # Groove haelt durch: erst wenn der Kick laenger als ~1 Takt (4 Kicks) ausbleibt, gegen 0.
+            # Rauf schnell (~0,8 s), runter langsam (~3 s) - einzelne verpasste Kicks machen keine Pause
+            target_drive = 0.0 if gap > max(4 * expected, 1.2) else regular
+            tau = 0.8 if target_drive > state["drive"] else 3.0
             state["drive"] += (target_drive - state["drive"]) * (1 - np.exp(-dt / tau))
             if (bass > average * BEAT_FACTOR and rise > average * 0.5 and levels["bass"] > 0.25
                     and gap > BEAT_GAP):
@@ -192,6 +194,8 @@ class PartyEffect:
         self.seen_beats = 0
         self.direction = 1
         self.blink, self.blink_color = 0.0, np.zeros(3, np.float32)
+        self.last_blink = 0.0         # Zeit des letzten Blinkens - hoechstens ~2,5 pro Sekunde
+        self.last_white = -99         # Kick-Nummer des letzten Weiss-Flashs
         self.scene, self.prev_scene, self.scene_start = SCENES[0], SCENES[0], 0.0
         self.scene_beat = 0
         self.peak = 0.0               # Spitze des Equalizers, faellt langsam
@@ -310,10 +314,11 @@ class PartyEffect:
         beat_len = 60 / bpm
         beats = a["beats"]
         energy = a.get("energy", 1.0)
-        # Party-Staerke folgt der Energie: unter ~0,25 nur Atmen, ab ~0,7 volle Party - weich, ohne Spruenge
+        # Party-Staerke: Energie (laut genug?) mal Drive (Kick im Takt?) - weich, ohne Spruenge
         drive = a.get("drive", 1.0)
-        target = 1 - _smooth((energy - 0.25) / 0.45) * _smooth((drive - 0.2) / 0.5)
-        self.calm += (target - self.calm) * (1 - np.exp(-dt / 0.6))
+        # normale Lautstaerke-Schwankungen (Energie 0,5-0,8) = volle Party; erst unter ~0,4 (Ausfaden) wird es ruhig
+        target = 1 - _smooth((energy - 0.15) / 0.35) * _smooth((drive - 0.2) / 0.4)
+        self.calm += (target - self.calm) * (1 - np.exp(-dt / 1.0))
         party = 1 - self.calm
 
         if beats != self.seen_beats:
@@ -323,13 +328,18 @@ class PartyEffect:
                 self.direction *= -1
             if beats - self.scene_beat >= SCENE_BEATS:
                 self._new_scene(now)
-            # Beat-Blinken: meist in der Hauptfarbe, harte Kicks weisslich, alle 8 Beats ein kraeftiger Weiss-Flash.
-            # In ruhigen Stellen kein Weiss. Nie schneller als der Beat - kein Stroboskop.
-            white = 0.85 if beats % 8 == 0 else 0.55 if a["strength"] > 0.7 else 0.0
-            if party < 0.5:
+            # Beat-Blinken in der Hauptfarbe - hoechstens ~2,5 pro Sekunde (bei doppelt erkanntem Tempo nur jeder
+            # zweite Kick). Weiss nur alle 16 Kicks oder bei ganz harten Kicks, mit mindestens 4 Kicks Abstand, und
+            # nur bei voller Party. Nach einer ruhigen Phase blinkt es erst sanft (party^2) - kein Blitz-Gewitter.
+            double = a["bpm"] > 170
+            if now - self.last_blink > 0.4 and not (double and beats % 2):
                 white = 0.0
-            self.blink = (0.35 + 0.35 * a["strength"]) * party
-            self.blink_color = main * (1 - white) + 255 * white
+                if party > 0.8 and beats - self.last_white >= 4 and (beats % 16 == 0 or a["strength"] > 0.9):
+                    white = 0.7 if beats % 16 == 0 else 0.45
+                    self.last_white = beats
+                self.blink = (0.25 + 0.25 * a["strength"]) * party ** 2
+                self.blink_color = main * (1 - white) + 255 * white
+                self.last_blink = now
         self.phase += self.direction * dt / (4 * beat_len)
 
         # Grundton pumpt mit dem Bass (nie ganz schwarz - kein hartes An/Aus), darunter das ruhige Atmen
