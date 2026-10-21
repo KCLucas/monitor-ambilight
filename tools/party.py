@@ -137,6 +137,10 @@ class AudioListener:
                 if gap < 2:
                     self._intervals.append(gap)
                     state["bpm"] = 60 / float(np.median(self._intervals))
+                if 0.25 <= gap <= 1.0:
+                    # zwei Kicks im plausiblen Takt: der Beat ist (wieder) da - sofort, ohne Einblenden
+                    # (gemessen an "Sparta - Fantasm Remix": vorher ~2 s zu spaet nach dem Break)
+                    state["drive"] = max(state["drive"], 0.9)
                 state["beats"] += 1
                 state["last_beat"] = now
                 state["strength"] = min(1.0, bass / max(average, 1e-6) / 2.5)
@@ -144,7 +148,8 @@ class AudioListener:
 
 # Muster-Kombinationen ("Szenen"): pro Song und alle 32 Beats eine andere, weich ueberblendet
 SCENES = [("fan", "waves"), ("scanner", "rise"), ("chase", "pingpong"), ("waves", "rise"), ("fan", "scanner"),
-          ("chase", "waves"), ("pingpong", "rise")]
+          ("chase", "waves"), ("pingpong", "rise"), ("hop", "comet"), ("center", "rain"), ("comet", "waves"),
+          ("hop", "rain"), ("center", "fan"), ("comet", "scanner"), ("hop", "rise"), ("rain", "chase")]
 SCENE_BEATS = 32
 SCENE_FADE = 1.5   # Beats
 
@@ -170,7 +175,7 @@ class PartyEffect:
         self.fade_from, self.fade_to, self.fade_start = self.colors.copy(), self.colors.copy(), 0.0
         self.from_spotify = 0.0       # wann EDITH zuletzt Farben aus dem Cover geschickt hat
         self.silent_since = None
-        xy, ring = [], []
+        xy, ring, owner = [], [], []
         for m in monitors:
             leds = np.array(m.get("leds") or [[i / max(1, m["count"]), 0.5] for i in range(m["count"])], np.float32)
             leds = leds[: m["count"]]
@@ -178,6 +183,7 @@ class PartyEffect:
             xy.append(pos + leds * size)
             # Lage rund um den eigenen Monitor (0..1, oben Mitte = 0, im Uhrzeigersinn) - fuer das Lauflicht
             ring.append((np.arctan2(leds[:, 0] - 0.5, 0.5 - leds[:, 1]) / (2 * np.pi)) % 1)
+            owner.append(np.full(m["count"], len(owner)))
         xy = np.concatenate(xy) if xy else np.zeros((0, 2), np.float32)
         low, high = xy.min(axis=0), xy.max(axis=0)
         center, half = (low + high) / 2, np.maximum((high - low) / 2, 1)
@@ -187,6 +193,11 @@ class PartyEffect:
         self.x = (xy[:, 0] - low[0]) / max(1, high[0] - low[0])  # 0 = links aussen, 1 = rechts aussen
         self.y = (xy[:, 1] - low[1]) / max(1, high[1] - low[1])  # 0 = ganz oben, 1 = ganz unten
         self.ring = np.concatenate(ring) if ring else np.zeros(0)
+        self.owner = np.concatenate(owner) if owner else np.zeros(0)  # zu welchem Monitor die LED gehoert
+        # Monitore von links nach rechts sortiert - fuers Monitor-Hopping
+        centers = [m.get("pos", [0, 0])[0] + m.get("size", [1, 1])[0] / 2 for m in monitors]
+        self.hop_order = [int(i) for i in np.argsort(centers)] if centers else [0]
+        self.drops = deque(maxlen=24)  # Lichtregen: (Startzeit, x-Position)
         self.total = len(xy)
         self.phase = 0.0
         self.last = time.monotonic()
@@ -273,6 +284,45 @@ class PartyEffect:
             level = np.maximum(level, seg)
         return level, which
 
+    def _hop(self, a, now, beat_len, dt):
+        """Monitor-Hopping: jeder Kick laesst den naechsten Monitor (von links nach rechts) aufleuchten."""
+        current = self.hop_order[self.seen_beats % len(self.hop_order)]
+        since = now - a["last_beat"] if a["last_beat"] else beat_len
+        glow = 0.3 + 0.7 * np.exp(-since / (beat_len * 0.7))
+        level = np.where(self.owner == current, glow, 0.05)
+        return level, (self.owner % 2).astype(float)
+
+    def _comet(self, a, now, beat_len, dt):
+        """Kometen mit Schweif kreisen um jeden Monitor - eine Runde in 2 Beats."""
+        head = (now / (2 * beat_len)) % 1
+        level, which = np.zeros(self.total), np.zeros(self.total)
+        for k in range(2):
+            behind = (head + k / 2 - self.ring) % 1          # wie weit die LED hinter dem Kopf liegt
+            tail = np.where(behind < 0.22, (1 - behind / 0.22) ** 2, 0)
+            which = np.where(tail > level, k, which)
+            level = np.maximum(level, tail)
+        return level, which
+
+    def _center(self, a, now, beat_len, dt):
+        """Auf jeden Kick schiessen zwei Balken vom Wandzentrum nach links und rechts auseinander."""
+        since = now - a["last_beat"] if a["last_beat"] else beat_len
+        reach = min(1.0, since / (beat_len * 0.8)) * 0.55
+        dist = np.abs(self.x - 0.5)
+        level = np.exp(-((dist - reach) / 0.05) ** 2) * max(0.0, 1 - since / (beat_len * 1.2))
+        return level, (dist > 0.3).astype(float)
+
+    def _rain(self, a, now, beat_len, dt):
+        """Lichtregen: Hi-Hats lassen Tropfen von oben nach unten ueber die Wand fallen."""
+        if self.rng.random() < a["high"] ** 2 * 0.35:
+            self.drops.append((now, float(self.rng.random())))
+        level = np.zeros(self.total)
+        for started, x in self.drops:
+            fall = (now - started) / (beat_len * 2)               # in 2 Beats von oben nach unten
+            if fall <= 1.2:
+                drop = np.exp(-((self.x - x) / 0.035) ** 2) * np.exp(-((self.y - fall) / 0.08) ** 2)
+                level = np.maximum(level, drop)
+        return np.clip(level * 1.2, 0, 1), (level > 0.6).astype(float)
+
     def _pingpong(self, a, now, beat_len, dt):
         side = self.seen_beats % 2                    # linke und rechte Haelfte im Wechsel
         since = now - a["last_beat"] if a["last_beat"] else beat_len
@@ -318,7 +368,8 @@ class PartyEffect:
         drive = a.get("drive", 1.0)
         # normale Lautstaerke-Schwankungen (Energie 0,5-0,8) = volle Party; erst unter ~0,4 (Ausfaden) wird es ruhig
         target = 1 - _smooth((energy - 0.15) / 0.35) * _smooth((drive - 0.2) / 0.4)
-        self.calm += (target - self.calm) * (1 - np.exp(-dt / 1.0))
+        # rauf (mehr Party) sofort, runter (Ausfaden) weich ueber ~1 s
+        self.calm += (target - self.calm) * (1 - np.exp(-dt / (0.04 if target < self.calm else 1.0)))
         party = 1 - self.calm
 
         if beats != self.seen_beats:
