@@ -60,7 +60,7 @@ AUTO_SCENES = {"game": "gaming", "video": "film"}  # Erkennung im Vordergrund ->
 AUTO_DEBOUNCE = 2  # s, so lange muss eine Erkennung stabil sein, bevor die Szene wechselt
 # Hinweis-Licht (z. B. EDITH: Timer abgelaufen) ueber allem anderen: pulse = atmen bis zum Ende,
 # blink = ein weiches Aufleuchten ueber die ganze Dauer. Laeuft spaetestens nach ALERT_MAX s aus.
-ALERT_STYLES = ("pulse", "blink")
+ALERT_STYLES = ("pulse", "blink", "flash")  # flash = Flashbang: sofort grell, dann ausklingen
 ALERT_MAX = 3600
 PULSE_PERIOD = 1.6  # s je Atemzug
 
@@ -290,6 +290,9 @@ class Engine:
         elapsed = now - alert["start"]
         if alert["style"] == "pulse":
             level = 0.08 + 0.92 * (0.5 - 0.5 * np.cos(2 * np.pi * elapsed / PULSE_PERIOD))
+        elif alert["style"] == "flash":
+            # Flashbang: 0,15 s volle Helligkeit, dann ausklingen wie geblendete Augen
+            level = 1.0 if elapsed < 0.15 else float(np.exp(-(elapsed - 0.15) / 0.7))
         else:
             level = np.sin(np.pi * elapsed / (alert["end"] - alert["start"]))
         return np.tile(alert["rgb"] * level, (leds, 1))
