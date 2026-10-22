@@ -155,3 +155,10 @@ Wo der Streifen an jedem Monitor beginnt und in welche Richtung er läuft, steht
 - [ ] Erster Test mit echter Hardware: kommen die DDP-Daten an, stimmen `start_corner`/`clockwise`?
 - [ ] Verhalten mit exklusivem Vollbild in deinen Spielen prüfen
 - [ ] Stromaufnahme der ECO-LEDs nachmessen und `ma_per_led_full_white` anpassen
+
+## Autostart
+
+Verknüpfung `Ambilight.lnk` im Windows-Autostart-Ordner (`shell:startup`): startet `start.bat` minimiert mit
+`AMBILIGHT_NO_BROWSER=1` (kein Browser-Fenster beim Hochfahren). Entfernen = Verknüpfung löschen.
+Mit „Licht aus, wenn der PC aus ist“ (`off_when_pc_off`) setzt das Programm WLEDs Rückfall-Preset auf Schwarz -
+~2,5 s nach dem letzten Bild vom PC (Herunterfahren, Standby, Programm beendet) wird es dunkel.
