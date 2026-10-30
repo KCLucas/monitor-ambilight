@@ -1,5 +1,5 @@
 {
-  "_hinweis": "Anordnung laut Wallpaper Engine: links | main | rechts in einer Reihe, oben ueber main. Alle 2560x1440. MSI MAG271CQP = 27 Zoll (curved); die drei LG IPS QHD sind als 27 Zoll ANGENOMMEN - Modell pruefen oder width_cm/height_cm der Rueckseite ausmessen. Reihenfolge = Reihenfolge der Ausgaenge am Controller.",
+  "_hinweis": "Anordnung laut Wallpaper Engine: links | main | rechts in einer Reihe, oben ueber main. Alle 2560x1440. Main seit 2026-10-29: LG UltraGear+ OLED (240 Hz, laut EDID 59x33 cm = 26,5 Zoll; diagonal_inch bleibt 27, damit die LED-Zahl zu WLED passt - bei neu aufgeklebtem Streifen LEDs zaehlen und ggf. anpassen); die drei LG IPS QHD sind als 27 Zoll ANGENOMMEN - Modell pruefen oder width_cm/height_cm der Rueckseite ausmessen. Reihenfolge = Reihenfolge der Ausgaenge am Controller.",
   "strip": {
     "type": "WS2812 ECO",
     "volts": 5,
@@ -23,9 +23,9 @@
   },
   "_monitor_felder": "enabled = Monitor gehoert zum Aufbau (seine LEDs sind im Datenstrom; an/aus im Alltag ueber die Weboberflaeche). desktop_pos = Position in den Windows-Anzeigeeinstellungen (tools/ambilight.py --list). start_corner/clockwise = wo der Streifen beginnt und in welche Richtung er laeuft, von VORNE auf den Bildschirm gesehen.",
   "monitors": [
-    { "name": "main", "model": "MSI MAG271CQP", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, 0], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
+    { "name": "main", "model": "LG UltraGear+ OLED", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, 0], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
     { "name": "links", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [-2560, 11], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
-    { "name": "rechts", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [2560, 0], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
+    { "name": "rechts", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [2560, 11], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
     { "name": "oben", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, -1440], "start_corner": "bottom-left", "clockwise": false, "enabled": true }
   ]
 }

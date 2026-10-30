@@ -84,6 +84,36 @@ def open_outputs(device_idx=0):
     return cams
 
 
+MATCH_TOLERANCE = 400  # px: so weit darf eine Anzeige von ihrer desktop_pos abweichen
+
+
+def match_cams(cams, monitors):
+    """Ordnet jedem Monitor die Anzeige an seiner desktop_pos zu.
+
+    Windows verschiebt Anzeigen beim Umstecken oder bei einem neuen Monitor gern um ein paar Pixel
+    (z. B. 2560,0 -> 2560,11). Deshalb zuerst exakte Treffer, danach die naechste noch freie Anzeige
+    innerhalb von MATCH_TOLERANCE. Jede Anzeige wird hoechstens einem Monitor zugeordnet.
+    """
+    found, used = {}, set()
+    for mon in monitors:
+        pos = tuple(mon["desktop_pos"])
+        if pos in cams:
+            found[mon["name"]] = cams[pos]
+            used.add(pos)
+    for mon in monitors:
+        if mon["name"] in found:
+            continue
+        x, y = mon["desktop_pos"]
+        free = [(abs(px - x) + abs(py - y), (px, py)) for px, py in cams if (px, py) not in used]
+        if free:
+            dist, pos = min(free)
+            if dist <= MATCH_TOLERANCE:
+                found[mon["name"]] = cams[pos]
+                used.add(pos)
+                print(f"Monitor {mon['name']}: Anzeige bei {pos} statt {tuple(mon['desktop_pos'])} - desktop_pos in monitors.json anpassen", flush=True)
+    return found
+
+
 def led_positions(hor, ver):
     """Vorschau-Position (x, y von 0 bis 1) jeder LED, im Uhrzeigersinn ab oben links (von vorne)."""
     top = [((i + 0.5) / hor, 0.0) for i in range(hor)]
@@ -308,11 +338,9 @@ def capture_worker(conn, cfg):
     try:
         # Alle Kameras festhalten, auch ungenutzte: das Wegraeumen einer Kamera stuerzt ab
         cams = open_outputs()
-        monitors = [
-            Monitor(mon, cfg["strip"], cfg["inset_cm"], cfg["capture"], cams.get(tuple(mon["desktop_pos"])))
-            for mon in cfg["monitors"]
-            if mon.get("enabled", True)
-        ]
+        enabled = [mon for mon in cfg["monitors"] if mon.get("enabled", True)]
+        matched = match_cams(cams, enabled)
+        monitors = [Monitor(mon, cfg["strip"], cfg["inset_cm"], cfg["capture"], matched.get(mon["name"])) for mon in enabled]
         spread = Spread(monitors)
         missing = [m.name for m in monitors if m.cam is None]
         conn.send([m.layout for m in monitors])
