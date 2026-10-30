@@ -23,7 +23,7 @@
   },
   "_monitor_felder": "enabled = Monitor gehoert zum Aufbau (seine LEDs sind im Datenstrom; an/aus im Alltag ueber die Weboberflaeche). desktop_pos = Position in den Windows-Anzeigeeinstellungen (tools/ambilight.py --list). start_corner/clockwise = wo der Streifen beginnt und in welche Richtung er laeuft, von VORNE auf den Bildschirm gesehen.",
   "monitors": [
-    { "name": "main", "model": "LG UltraGear+ OLED", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, 0], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
+    { "name": "main", "model": "LG 27GX704A-B (UltraGear OLED)", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, 0], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
     { "name": "links", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [-2560, 11], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
     { "name": "rechts", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [2560, 11], "start_corner": "bottom-left", "clockwise": false, "enabled": true },
     { "name": "oben", "model": "LG IPS QHD", "diagonal_inch": 27, "aspect": [16, 9], "desktop_pos": [0, -1440], "start_corner": "bottom-left", "clockwise": false, "enabled": true }
