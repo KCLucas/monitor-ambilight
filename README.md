@@ -1,55 +1,153 @@
-# monitor-ambilight
+# Monitor Ambilight
 
-Ambient-Licht hinter meinen Monitoren: adressierbare LED-Streifen auf der Rückseite, gesteuert von einem ESP32.
+Ambient-Licht für **mehrere Monitore**: Jeder Monitor hat seinen eigenen LED-Streifen auf der Rückseite, und jeder Streifen zeigt die Farben vom Rand **seines eigenen** Bildes. Ein kleines Python-Programm unter Windows greift die Monitore ab und schickt die Farben per DDP an einen ESP32 mit [WLED](https://kno.wled.ge/).
 
-Ziel: mindestens einmal komplett um den Main-Monitor, am besten je einmal um alle 4 Monitore.
+Bedient wird alles über eine Weboberfläche im Browser oder als App auf dem Handy. Dazu gibt es einen Party-Modus im Takt der Musik.
+
+Fertige Programme können das mit vier Monitoren nicht zuverlässig. SignalRGB greift nur einen Monitor ab. HyperHDR fasst mehrere Monitore je nach Treiber zu einem Bild zusammen, Prismatik braucht mehrere Instanzen. Deshalb gibt es dieses Projekt.
+
+## Funktionen
+
+- **Ein Ambilight pro Monitor:** beliebig viele Monitore, jeder mit eigener LED-Schleife und eigenem WLED-Ausgang.
+- **„Aktiver für alle“:** Auf Wunsch zeigen alle LEDs den aktiven Monitor, also den mit dem Fenster im Vordergrund oder einen festen. Die LEDs der anderen Monitore führen sein Licht passend zur Richtung nach außen fort.
+- **Szenen:** Gaming, Film und Entspannt. Die **Auto-Szene** erkennt Spiele und Videos im Vollbild und schaltet selbst um.
+- **Party-Modus:** Licht im Takt der Musik über die ganze Monitorwand, mit Laserfächer, Druckwellen, Kometen und mehr.
+- **Hinweis-Licht für andere Programme:** zum Beispiel rot pulsieren, wenn ein Timer abläuft.
+- **Weboberfläche** mit Live-Vorschau aller Monitore in ihrer echten Anordnung. Sie läuft auch als **Handy-App** (PWA über HTTPS im Heimnetz).
+- **Licht aus, wenn der PC aus ist:** WLED fällt ohne Datenstrom nach ~2,5 s auf Schwarz zurück.
+- **Sparsam:** Bei 30 Bildern/s braucht das Programm etwa 6 % eines CPU-Kerns für vier QHD-Monitore (siehe [Leistung](#leistung)).
+- **Robust:** Die Aufnahme läuft in einem eigenen Prozess. Monitor aus, Vollbild-Wechsel, UAC oder Standby legen Webseite und LEDs nicht lahm.
+
+## Voraussetzungen
+
+- Windows 10 oder 11 (die Aufnahme nutzt DXGI Desktop Duplication)
+- Python 3.11 oder neuer
+- ESP32 mit WLED, ein Datenausgang pro Monitor
+- adressierbare LED-Streifen (z. B. WS2812, 5 V) und ein passendes Netzteil, siehe [Hardware](#hardware)
+
+## Schnellstart
+
+1. **WLED** auf den ESP32 flashen (https://install.wled.me) und ins WLAN bringen. Als Hostname `wled-ambilight` eintragen oder seine IP in `monitors.json` unter `wled.host`.
+2. **Monitore eintragen:** `monitors.json` an deine Monitore anpassen (siehe [Konfiguration](#konfiguration)). Die Positionen zeigt dir
+   ```powershell
+   .\.venv\Scripts\python tools\ambilight.py --list
+   ```
+3. **LED-Zahlen ausrechnen:** `python tools\led_layout.py` gibt LEDs pro Kante, den Startindex pro Monitor und das Stromlimit aus. Die Werte unter *LED Preferences* in WLED eintragen (ein Ausgang pro Monitor, in der Reihenfolge aus `monitors.json`).
+4. **Starten:** `start.bat` doppelklicken. Beim ersten Mal richtet es die Python-Umgebung ein, danach öffnet sich **http://localhost:8765**.
+
+Zum Ausprobieren ohne Hardware: `start.bat --dry-run` sendet nichts an WLED und zeigt nur die Vorschau.
+
+## Konfiguration
+
+`monitors.json` beschreibt Streifen, Netzteil, WLED und die Monitore. Pro Monitor:
+
+| Feld | Bedeutung |
+|---|---|
+| `name` | frei wählbar, erscheint in der Oberfläche |
+| `diagonal_inch`, `aspect` | Größe, daraus berechnet `led_layout.py` die LEDs pro Kante |
+| `desktop_pos` | Position in den Windows-Anzeigeeinstellungen (`--list`). Kleine Abweichungen (bis 400 px) werden toleriert. |
+| `start_corner`, `clockwise` | wo der Streifen beginnt und in welche Richtung er läuft, von vorne gesehen. Ist das Licht „verdreht“, nur diese beiden Werte ändern. |
+| `enabled` | gehört der Monitor zum Aufbau? An und aus im Alltag geht über die Oberfläche. |
+
+Die Einstellungen aus der Oberfläche landen in `settings.json` (nicht im Repo).
+
+Weitere Optionen von `tools\ambilight.py`:
+
+| Option | Wirkung |
+|---|---|
+| `--dry-run` | nichts an WLED senden, nur Vorschau |
+| `--list` | Monitore mit Desktop-Position anzeigen und beenden |
+| `--port 8765` | Port der Weboberfläche |
+| `--local` | Oberfläche nur auf diesem PC, nicht im Heimnetz (dann ohne HTTPS) |
+| `--config`, `--settings` | andere Dateien als `monitors.json` / `settings.json` |
+
+Umgebungsvariablen:
+
+| Variable | Wirkung |
+|---|---|
+| `AMBILIGHT_NO_BROWSER=1` | `start.bat` öffnet keinen Browser (z. B. im Autostart) |
+| `AMBILIGHT_AUDIO` | Anfang des Namens des Wiedergabegeräts, das der Party-Modus mithört. Standard: Elgato Wave Link „Music“, ohne Treffer die Windows-Standardausgabe. |
+
+## Szenen
+
+Szenen legen nur die Dynamik fest. Die Farbregler (bunte Pixel bevorzugen, Weiß reduzieren, dunkle Töne absenken) gelten für alle Szenen.
+
+| Szene | Bilder/s | Glättung | Tiefe | Gedanke |
+|---|---|---|---|---|
+| Gaming | 60 | 20 % | 15 % | schnelle Reaktion, kostet dank direktem Bildzugriff kaum etwas |
+| Film | 30 | 45 % | 25 % | Filme haben 24 Bilder/s, mehr bringt dort nichts |
+| Entspannt | 20 | 85 % | 40 % | ruhiges Raumlicht, wenig Last |
+| Eigene | – | – | – | wer einen Regler verstellt, landet hier; die Werte bleiben gespeichert |
+
+**Auto-Szene** (`tools/foreground.py`):
+
+- Spiele (Programme in Steam-, Epic- oder Xbox-Ordnern und andere Vollbild-Programme) schalten auf Gaming.
+- Videoplayer sowie Browser oder Store-Apps im Vollbild schalten auf Film.
+- Sonst geht es zurück zur zuletzt selbst gewählten Szene.
+
+Umgeschaltet wird erst, wenn ein Wechsel 2 s stabil ist.
+
+Die **Taskleiste** wird nicht ausgewertet, außer auf der Anzeige, auf der gerade ein Vollbild-Programm läuft.
+
+## Party-Modus
+
+Knopf „Party“ in der Oberfläche oder `{"mode": "party"}` an die API. Zurück geht es mit `{"party": false}`.
+
+`tools/party.py` hört die Musik per WASAPI-Loopback mit, nur solange der Modus an ist. Daraus erkennt es Bass, Kicks und Tempo und malt auf die ganze Monitorwand als eine Fläche: Jede LED sitzt an ihrer echten Position, Effekte laufen über Monitorgrenzen hinweg.
+
+- **Zehn Muster:** Laserfächer, Druckwelle, Scanner-Balken, Equalizer, Lauflicht, Pingpong, Monitor-Hopping, Kometen, Balken aus der Mitte und Lichtregen. Je zwei bilden eine Szene, pro Song und alle 32 Beats gibt es eine neue, weich überblendet.
+- **Die Stärke folgt dem Song:** Volle Party gibt es nur, wenn es laut ist und die Kicks regelmäßig im Takt kommen. Breaks und melodische Teile blenden auf ruhiges Farbatmen zurück. Kommt der Kick zurück, ist die Party sofort wieder da.
+- **Farben:** pro Song eine Farbrichtung (Hauptfarbe und Nachbarton), weiche Wechsel, keine harten bunten Blitze. Ein anderes Programm kann sie vorgeben, z. B. aus dem Album-Cover (siehe API).
+
+## API
+
+Die Oberfläche nutzt dieselbe kleine HTTP-API, die auch anderen Programmen offensteht (`http://<pc>:8765`):
+
+| Aufruf | Wirkung |
+|---|---|
+| `GET /api/state` | aktueller Zustand und Einstellungen |
+| `GET /api/layout` | Monitore und LED-Positionen für die Vorschau |
+| `GET /api/stream` | Live-Farben als Server-Sent Events |
+| `POST /api/settings` | Einstellungen ändern, z. B. `{"mode": "color", "color": "#ff7a18", "brightness": 60}`. Mit `"for": 30` stellt das Programm nach 30 s selbst zurück. |
+| `POST /api/alert` | Hinweis-Licht über allem, z. B. `{"color": "#ff0000", "style": "pulse", "seconds": 600}` mit `style` = `pulse`, `blink` oder `flash`. `{"off": true}` beendet es. Danach blendet das Licht zurück zu dem, was vorher lief. |
+| `POST /api/party` | Farbrichtung für den Party-Modus: `{"colors": ["#ff0020", "#ff4126"]}` |
+
+## Handy-App
+
+Chrome installiert Web-Apps nur von HTTPS-Seiten mit vertrauenswürdigem Zertifikat. Das Programm legt dafür beim Start eine eigene kleine Zertifizierungsstelle in `certs/` an. Der Ordner ist nicht im Repo, er enthält private Schlüssel. Zusätzlich bietet es die Seite per HTTPS auf Port 8766 an. Der Knopf „Aufs Handy“ zeigt beide Schritte mit QR-Code:
+
+1. Einmalig `http://<pc>:8765/ca.crt` laden und in Android als **CA-Zertifikat** installieren (Einstellungen, Suche „Zertifikat installieren“).
+2. `https://<pc>:8766` in Chrome öffnen, dann im Menü „App installieren“.
+
+Mit einer Fritz!Box nutzt das Programm den Namen `<pc>.fritz.box`, der auch bei IP-Wechseln gültig bleibt. Jeder im WLAN kann das Licht steuern. Mit `--local` ist die Seite nur am PC erreichbar.
 
 ## Hardware
 
+Mein Aufbau: vier 27"-Monitore mit 2560×1440 (`links | main | rechts` in einer Reihe, `oben` über dem Main-Monitor).
+
 | Teil | Daten | Menge |
 |---|---|---|
-| BTF-LIGHTING WS2812 ECO (B088BDLMH2) | 5 V, 60 LEDs/m, 5 m, 300 LEDs, RGB, laut Angebotsseite IP67 | 2 (= 10 m, 600 LEDs) |
-| BTF-LIGHTING Netzteil (B0FY63B939) | 5 V, 10 A, 50 W | 1 |
-| ESP32 Dev-Board | vorhanden | 1 |
+| BTF-LIGHTING WS2812 ECO | 5 V, 60 LEDs/m, 5 m, 300 LEDs | 2 (= 10 m, 600 LEDs) |
+| BTF-LIGHTING Netzteil | 5 V, 10 A, 50 W | 1 |
+| ESP32 Dev-Board | mit WLED | 1 |
+| Elektrolytkondensator | 1000 µF, ≥ 6,3 V, am Netzteil-Ausgang | 1 |
+| Widerstand | 330–470 Ω, je einer pro Datenleitung | 4 |
+| Pegelwandler 74AHCT125 | 3,3 V → 5 V, empfohlen | 1 |
 
-Noch zu besorgen (Kleinteile):
+**Warum ESP32 statt Arduino:** Ein Uno oder Nano hat nur 2 KB RAM, und 400 LEDs belegen davon schon 1,2 KB. Ohne WLAN bräuchte er dauerhaft USB, und seriell kommen bei 400 LEDs nur wenige Bilder pro Sekunde an. Der ESP32 mit WLED bringt WLAN, mehrere Ausgänge, Segmente, Strombegrenzung und DDP mit, ganz ohne eigenen Code.
 
-- Elektrolytkondensator 1000 µF / ≥ 6,3 V, direkt am Netzteil-Ausgang zwischen 5 V und GND
-- 4× Widerstand 330–470 Ω, je einer in jeder Datenleitung
-- Pegelwandler 74AHCT125 (3,3 V → 5 V) – empfohlen, bei kurzen Datenleitungen oft auch ohne lauffähig
-- Litze 0,75–1,0 mm² für 5 V/GND, dünne Litze für Daten
-- Eck-Verbinder oder Lötzeug für die 4 Ecken pro Monitor
+### LEDs und Strom
 
-## Entscheidungen
-
-- **ESP32 statt Arduino.** Jeden Monitor einzeln ansteuern ginge auch mit einem Arduino (4 Datenpins, FastLED). Aber ein Uno/Nano hat nur 2 KB RAM, und ~408 LEDs belegen davon schon 1,2 KB – das reicht knapp für feste Farben und einfache Effekte, nicht für mehr. Ohne WLAN braucht er außerdem dauerhaft USB zum PC, und über die serielle Leitung kommen bei 400 LEDs nur wenige Bilder pro Sekunde an – zu langsam, damit das Licht dem Bild folgt. Der ESP32 hat genug Speicher, WLAN, Web-Oberfläche/App und läuft mit WLED ohne eigenen Code.
-- **WLED als Firmware**, kein eigener Code auf dem ESP32. WLED kann mehrere LED-Ausgänge, Segmente, Effekte, Strombegrenzung und Live-Daten vom PC (DDP).
-- **Eigenes PC-Programm** für das Ambilight pro Monitor, mit lokaler Weboberfläche (siehe Software).
-- **Ein Datenausgang pro Monitor** (4 GPIOs). Jeder Monitor ist dann ein eigenes Segment, die Datenwege bleiben kurz und ein Defekt legt nicht alles lahm.
-- **Helligkeit per Software begrenzen.** Das Netzteil reicht nicht für Vollweiß auf allen LEDs (siehe Strombudget), für Ambient-Licht aber problemlos.
-
-## LED-Aufteilung und Strombudget
-
-`monitors.json` beschreibt Streifen, Netzteil und Monitore; `tools/led_layout.py` rechnet daraus LEDs pro Kante, Startindex pro Monitor und das Stromlimit aus.
-
-```
-python tools/led_layout.py
-```
-
-Anordnung: `links | main | rechts` in einer Reihe, `oben` über dem Main-Monitor, alle 2560×1440. Main ist ein MSI MAG271CQP (27", curved), die drei LG IPS QHD sind als 27" angenommen.
-
-Ergebnis mit 4× 27" 16:9, Streifen 2 cm eingerückt:
+`tools/led_layout.py` rechnet aus `monitors.json` die LEDs pro Kante und das Stromlimit. Mit vier 27"-Monitoren und 2 cm eingerücktem Streifen:
 
 | | LEDs | Länge |
 |---|---|---|
 | pro Monitor | 102 (33 oben/unten, 18 links/rechts) | 1,70 m |
 | alle 4 | 408 von 600 | 6,80 m von 10 m |
 
-- Vollweiß auf 408 LEDs wären ca. 24,5 A (gerechnet mit 60 mA/LED – die ECO-Variante liegt vermutlich darunter, nachmessen).
-- Netzteil-Budget: 8,5 A (10 A mit 15 % Reserve) → in WLED als Stromlimit **8500 mA** eintragen.
-- Das entspricht ca. 35 % Helligkeit bei Vollweiß; bei farbigem Bildinhalt deutlich mehr.
+Vollweiß auf 408 LEDs wären ca. 24,5 A. Das Netzteil-Budget liegt bei 8,5 A (10 A minus 15 % Reserve), deshalb in WLED **8500 mA** als Stromlimit eintragen. Für Ambient-Licht reicht das problemlos.
 
-## Verkabelung
+### Verkabelung
 
 ```
 Netzteil 5 V ──┬── 1000 µF ── GND
@@ -65,100 +163,32 @@ ESP32 GPIO18 ── [Pegelwandler] ── 330 Ω ── DIN Monitor 3
 ESP32 GPIO19 ── [Pegelwandler] ── 330 Ω ── DIN Monitor 4
 ```
 
-- Jede Monitor-Schleife bekommt 5 V und GND direkt vom Netzteil, nicht durchgeschleift vom vorherigen Monitor.
-- Wenn das Ende einer Schleife sichtbar rötlicher/dunkler ist als der Anfang: 5 V und GND zusätzlich am Schleifenende einspeisen.
-- Pfeilrichtung auf dem Streifen beachten (Daten laufen von DIN nach DOUT).
-- ESP32 nie gleichzeitig über USB **und** das 5 V-Netzteil versorgen, solange nicht klar ist, dass das Board das verträgt – zum Flashen das Netzteil abziehen.
-- GPIO16/17 sind auf WROVER-Boards (mit PSRAM) belegt; dann andere Pins nehmen.
-- Montage: Die Silikonhülle (IP67) klebt schlecht und lässt sich in den Ecken nicht knicken. Pro Monitor in 4 Stücke schneiden (nur an den Schnittmarken) und die Ecken verbinden.
+- Jede Schleife bekommt 5 V und GND direkt vom Netzteil. Wird das Ende rötlich oder dunkler, zusätzlich am Schleifenende einspeisen.
+- Pfeilrichtung auf dem Streifen beachten: Die Daten laufen von DIN nach DOUT.
+- Den ESP32 nie gleichzeitig über USB und das Netzteil versorgen. Zum Flashen das Netzteil abziehen.
+- GPIO16 und 17 sind auf WROVER-Boards (mit PSRAM) belegt, dann andere Pins nehmen.
+- Silikonhüllen (IP67) kleben schlecht und lassen sich in den Ecken nicht knicken. Pro Monitor in 4 Stücke schneiden (nur an den Schnittmarken) und die Ecken verbinden.
 
-## Software
+## Leistung
 
-Ziel: Jeder Monitor spiegelt **seinen eigenen** Bildinhalt in seine eigene LED-Schleife.
+Gemessen mit RX 9070 XT, 16 Threads und 4× 2560×1440 für das ganze Programm:
 
-Fertige Programme können das mit 4 Monitoren nicht zuverlässig: SignalRGB greift laut Doku nur einen Monitor ab, HyperHDR kann mehrere Monitore nur zu einem Bild zusammenfassen (je nach Grafikkarte/Treiber), Prismatik nur über mehrere Instanzen. Deshalb gibt es ein eigenes kleines PC-Programm in `tools/`.
+| Bilder/s | Last |
+|---|---|
+| 30 | ~6 % eines CPU-Kerns |
+| 60 | ~22 % eines Kerns (1,4 % der gesamten CPU) |
 
-### ESP32 (WLED)
+`tools/capture.py` liest das Bild direkt aus dem gemappten Abbild, und zwar nur jedes 8. Pixel, statt 14,7 MB pro Bild zu kopieren. Die LED-Farben rechnet es pro Kante vektorisiert.
 
-1. **WLED** auf den ESP32 flashen (https://install.wled.me), ins WLAN bringen, Hostname `wled-ambilight` (oder IP in `monitors.json` unter `wled.host` eintragen).
-2. *LED Preferences*: 4 Ausgänge (WS281x, GRB) in der Reihenfolge aus `monitors.json` – main, links, rechts, oben – mit je der LED-Zahl aus `led_layout.py`. Stromlimit 8500 mA.
-3. Ohne laufenden PC kann WLED selbst Farben/Effekte zeigen; sobald das PC-Programm sendet, übernimmt es automatisch (Realtime/DDP).
-
-### PC-Programm mit Weboberfläche
-
-Am einfachsten: **`start.bat`** doppelklicken. Beim ersten Mal richtet es die Python-Umgebung ein, danach startet es das Programm und öffnet den Browser. Fenster schließen oder Strg+C beendet es.
-
-Von Hand in PowerShell (im Projektordner, mit `.\` davor):
-
-```powershell
-cd "H:\IoT Projects\monitor-ambilight"
-python -m venv .venv
-.\.venv\Scripts\pip install -r requirements.txt
-.\.venv\Scripts\python tools\ambilight.py
-```
-
-Dann im Browser **http://localhost:8765** öffnen:
-
-- Live-Vorschau aller 4 Monitore in ihrer echten Anordnung, mit den LED-Farben drumherum; Monitor antippen schaltet ihn an/aus
-- Modus: **Ambilight** (folgt dem Bild), **Farbe**, **Aus**, dazu die Helligkeit
-- Feste Farben mit einem Tipp (Palette + eigene Farbe), ohne vorher den Modus zu wechseln
-- Szenen (siehe unten) und Auto-Szene
-- Darstellung **„Jeder für sich“** (jeder Monitor speist seine eigenen LEDs) oder **„Aktiver für alle“**: alle LEDs zeigen den aktiven Monitor – „Auto“ nimmt den mit dem aktiven Fenster, oder ein fester Monitor. Von jeder LED wird eine Linie zur Mitte des aktiven Monitors gezogen; wo sie in ihn eintritt, wird sein Rand ausgewertet. Seine eigenen LEDs zeigen also ganz normal seinen Rand, die der anderen Monitore verlängern sein Ambilight passend zur Richtung nach außen.
-- **Taskleiste ignorieren:** der Bereich der Taskleiste (aus dem Windows-Arbeitsbereich jeder Anzeige) wird nicht ausgewertet – außer auf der Anzeige, auf der gerade ein Vollbild-Programm läuft
-- Feineinstellungen in zwei Gruppen: **Dynamik** (Glättung, Erfassungstiefe, Bilder pro Sekunde – gehört zur Szene) und **Farbe** (Bunte Pixel bevorzugen, Weiß reduzieren, Dunkle Töne absenken – gilt für alle Szenen)
-- **Licht aus, wenn PC aus:** WLED bleibt „an“, bekommt aber Schwarz als eigene Farbe. Endet der Datenstrom vom PC (PC aus, Standby, Programm beendet), fällt WLED nach ~2,5 s auf diese Farbe zurück – also dunkel. (WLED auf „aus“ zu stellen funktioniert nicht: im Aus-Zustand zeigt WLED 16 auch die Live-Daten nicht an.) Ist der Schalter aus, wird die im Programm gewählte Farbe die Rückfallfarbe. Zusätzlich ist in WLED „Force max brightness“ für Live-Daten an, damit nur der Helligkeitsregler im Programm zählt.
-
-**Szenen** legen nur die Dynamik fest:
-
-| Szene | Bilder/s | Glättung | Tiefe | Gedanke |
-|---|---|---|---|---|
-| Gaming | 60 | 20 % | 15 % | schnelle Reaktion; kostet dank direktem Bildzugriff kaum etwas |
-| Film | 30 | 45 % | 25 % | Filme haben 24 Bilder/s – mehr als 30 bringt dort nichts |
-| Entspannt | 20 | 85 % | 40 % | ruhiges Raumlicht, wenig Last |
-| Eigene | – | – | – | wer einen Dynamik-Regler verstellt, landet hier; die Werte bleiben gespeichert, auch wenn man zwischendurch Film oder Gaming wählt |
-
-**Auto-Szene:** erkennt das Programm im Vordergrund (`tools/foreground.py`): Spiele (Programm in Steam-/Epic-/Xbox-/… Ordnern oder anderes Vollbild-Programm) → Gaming, Videoplayer bzw. Browser/Store-App im Vollbild → Film, sonst zurück auf die zuletzt selbst gewählte Szene. Umgeschaltet wird nur bei einem Wechsel, der 2 s stabil ist; was man währenddessen selbst nachstellt, bleibt.
-- WLED-Status und Button zur WLED-Oberfläche des ESP32
-
-**Vom Handy als App:** Chrome installiert Web-Apps nur von HTTPS-Seiten mit vertrauenswürdigem Zertifikat. Das Programm legt dafür beim Start eine eigene kleine Zertifizierungsstelle in `certs/` an (nicht im Repo, enthält private Schlüssel) und bietet die Seite zusätzlich per HTTPS auf Port 8766 an, unter `https://<pc>.fritz.box:8766` – der Fritz!Box-Name bleibt auch bei IP-Wechsel gültig. Der Button „Aufs Handy“ zeigt beide Schritte mit QR-Code:
-
-1. Einmalig `http://<pc>.fritz.box:8765/ca.crt` laden und in den Android-Einstellungen als **CA-Zertifikat** installieren (Suche: „Zertifikat installieren“; Display-Sperre nötig).
-2. `https://<pc>.fritz.box:8766` in Chrome öffnen → Menü → „App installieren“.
-
-Firewall-Freigaben für Port 8765 und 8766 gibt es nur im privaten Netzwerkprofil. Jeder im WLAN kann das Licht steuern; mit `--local` ist die Seite nur am PC erreichbar (dann ohne HTTPS).
-
-Die Bildschirmaufnahme läuft in einem eigenen Prozess (`tools/capture.py`): Entzieht Windows die Aufnahme (Monitor aus/an, Vollbild-Wechsel, UAC, Standby) oder stürzt sie ab, startet sie frisch, ohne dass Webseite oder LEDs ausfallen. dxcams eigene Erholung wird dabei umgangen, weil sie selbst abstürzt. Fehlt ein Monitor (aus oder im Tiefschlaf – DisplayPort-Monitore melden sich dann bei Windows ab), bleiben seine LEDs schwarz, die Vorschau zeigt „kein Signal“, und alle 30 s wird geprüft, ob er zurück ist.
-
-Party-Modus, Stand jetzt: zehn Muster (Laserfächer, Druckwelle, Scanner-Balken, Equalizer von unten, Lauflicht um jeden Monitor, Pingpong links/rechts, Monitor-Hopping pro Kick, Kometen mit Schweif, Balken aus der Wandmitte, Lichtregen bei Hi-Hats), je zwei als Szene (15 Kombinationen) – pro Song und alle 32 Beats eine neue, weich überblendet. Die Stärke folgt dem Song: volle Party nur, wenn es laut ist (gemessen an den lauten Stellen der letzten ~40 s) UND die Kicks regelmäßig im Takt kommen (Regelmäßigkeit der letzten 8 Kicks; ein Kick zählt nur bei schlagartigem Bass-Anstieg, nicht bei anschwellender Bass-Melodie). Ausfaden, Breaks und melodische Teile ohne Kick blenden weich (~1 s) bis auf ruhiges Farbatmen aus; kommt der Kick zurück, ist die Party sofort voll da – ohne Einblenden (zwei Kicks im plausiblen Takt reichen; Referenz: „Sparta – Fantasm Remix“, vorher ~2 s Verzögerung nach dem Break). Doppelt erkanntes Tempo (> 170 BPM) wird für die Bewegungen halbiert. Harte Kicks blitzen weißlich, alle 8 Beats ein kräftiger Weiß-Flash (nie schneller als der Beat, in ruhigen Stellen gar nicht). Ältere Beschreibung: Party-Modus (Knopf „Party“ oder `{"mode": "party"}`, zurück mit `{"party": false}`): Licht im Takt der Musik. `tools/party.py` hört per WASAPI-Loopback den Wave-Link-Kanal „Music“ mit (nur Musik, unabhängig von den Reglern), erkennt Bass, Beats und Tempo und malt auf die ganze Monitorwand als eine Fläche (jede LED an ihrer echten Position, Effekte laufen über Monitorgrenzen hinweg): ein Laserfächer dreht sich um die Mitte der Wand (eine Umdrehung in 4 Beats, Richtung kippt alle 8 Beats), auf jeden Beat läuft eine Druckwelle von der Mitte nach außen, alle 4 Beats fährt ein Balken quer über alle Monitore, die ganze Wand blinkt weich auf jeden Beat, Bass-Pumpen und helles Funkeln bei Hi-Hats. Farben: pro Song nur eine Farbrichtung (Hauptfarbe + Nachbarton, kein buntes Hin und Her, keine harten weißen Blitze – auch wegen Epilepsie); EDITH schickt sie aus dem Spotify-Cover (`POST /api/party {"colors": ["#ff0020", "#ff4126"]}`), sonst wechselt eine zufällige Familie nach einer Songpause, Wechsel blenden über 2,5 s – ungeglättet mit mindestens 50 fps. Ohne Musik wabert es langsam. Die Musik wird nur mitgehört, solange der Modus an ist.
-
-Hinweis-Licht für andere Programme (z. B. EDITH bei einem abgelaufenen Timer): `POST /api/alert` mit `{"color": "#ff0000", "style": "pulse", "seconds": 600}` (pulse = atmen, blink = einmal weich aufleuchten, flash = Flashbang: sofort grell, dann ausklingen) liegt in voller Helligkeit über allem, auch wenn das Licht aus oder gedimmt ist; `{"off": true}` beendet es. Die Einstellungen bleiben dabei unberührt – danach blendet das Licht zurück zu dem, was vorher lief. Spätestens nach einer Stunde läuft es aus.
-
-Einstellungen werden in `settings.json` gespeichert. Weitere Aufrufe:
-
-- `start.bat --dry-run` – nichts an WLED senden, nur Vorschau (zum Testen ohne Hardware)
-- `.\.venv\Scripts\python tools\ambilight.py --list` – Anzeigen mit Desktop-Position; muss zu `desktop_pos` in `monitors.json` passen
-
-Wo der Streifen an jedem Monitor beginnt und in welche Richtung er läuft, steht in `monitors.json` (`start_corner`, `clockwise`, von vorne gesehen). Wenn das Licht nach dem Aufkleben „verdreht“ ist, nur diese beiden Werte anpassen.
-
-### Beim Spielen
-
-- Erfasst wird per DXGI Desktop Duplication, wie bei OBS – kein Eingriff ins Spiel, Anti-Cheat-unkritisch.
-- Gemessen auf diesem PC (RX 9070 XT, 16 Threads, 4× 2560×1440), ganzes Programm: alle 4 Monitore bei 30 Bildern/s ~6 % eines CPU-Kerns, bei 60 Bildern/s ~22 % eines Kerns (1,4 % der gesamten CPU). Möglich durch zwei Optimierungen in `tools/capture.py`: Das Bild wird direkt aus dem gemappten Abbild gelesen, nur jedes 8. Pixel (statt das ganze 14,7-MB-Bild zu kopieren), und die LED-Farben werden pro Kante vektorisiert berechnet.
-- Spiele am besten im **randlosen Fenstermodus**; echtes Exklusiv-Vollbild kann die Erfassung kurz unterbrechen.
-- Mit HDR werden die Farben blasser. DRM-geschützte Videos (Netflix etc. im Browser) liefern ein schwarzes Bild.
-
-## Offene Punkte
-
-- [ ] Größe der drei LG-Monitore bestätigen (angenommen 27") oder Rückseiten ausmessen
-- [ ] Prüfen, welche Variante des Streifens geliefert wurde (IP-Schutzart, tatsächlich 5 m / 300 LEDs)
-- [ ] Welches ESP32-Board genau (WROOM/WROVER, Pinbelegung)?
-- [ ] Erster Test mit echter Hardware: kommen die DDP-Daten an, stimmen `start_corner`/`clockwise`?
-- [ ] Verhalten mit exklusivem Vollbild in deinen Spielen prüfen
-- [ ] Stromaufnahme der ECO-LEDs nachmessen und `ma_per_led_full_white` anpassen
+- Die Erfassung läuft wie bei OBS. Es gibt keinen Eingriff ins Spiel, unkritisch für Anti-Cheat.
+- Spiele am besten im **randlosen Fenstermodus** laufen lassen. Echtes Exklusiv-Vollbild kann die Erfassung kurz unterbrechen.
+- Mit HDR werden die Farben blasser. DRM-geschützte Videos (z. B. Netflix im Browser) liefern ein schwarzes Bild.
+- Fehlt ein Monitor (aus oder im Tiefschlaf), bleiben seine LEDs schwarz. Die Vorschau zeigt „kein Signal“, und alle 30 s prüft das Programm, ob er zurück ist.
 
 ## Autostart
 
-Verknüpfung `Ambilight.lnk` im Windows-Autostart-Ordner (`shell:startup`): startet `start.bat` minimiert mit
-`AMBILIGHT_NO_BROWSER=1` (kein Browser-Fenster beim Hochfahren). Entfernen = Verknüpfung löschen.
-Mit „Licht aus, wenn der PC aus ist“ (`off_when_pc_off`) setzt das Programm WLEDs Rückfall-Preset auf Schwarz -
-~2,5 s nach dem letzten Bild vom PC (Herunterfahren, Standby, Programm beendet) wird es dunkel.
+Eine Verknüpfung auf `start.bat` in `shell:startup` legen: minimiert starten und `AMBILIGHT_NO_BROWSER=1` setzen. Mit „Licht aus, wenn der PC aus ist“ wird es nach dem Herunterfahren von selbst dunkel.
+
+## Lizenz
+
+[MIT](LICENSE)

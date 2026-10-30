@@ -27,3 +27,6 @@ __pycache__/
 .idea/
 Thumbs.db
 desktop.ini
+
+# Sicherungen lokaler Einstellungen
+*.bak

@@ -12,6 +12,7 @@ die Wand blinkt auf jeden Beat in der Hauptfarbe, Grundton pumpt mit dem Bass, H
 """
 
 import colorsys
+import os
 import threading
 import time
 from collections import deque
@@ -35,8 +36,10 @@ SILENCE = 0.6          # s ohne Audio = Pause
 class AudioListener:
     """Analysiert die Musik im Hintergrund; levels() liefert den letzten Stand (Werte 0..1)."""
 
-    def __init__(self, device_hint="Music (Elgato"):
-        self.device_hint = device_hint
+    def __init__(self, device_hint=None):
+        # Welches Wiedergabegeraet mitgehoert wird (Anfang des Namens), z. B. AMBILIGHT_AUDIO="Lautsprecher".
+        # Ohne Treffer: die Standardausgabe von Windows.
+        self.device_hint = device_hint or os.environ.get("AMBILIGHT_AUDIO", "Music (Elgato")
         self.lock = threading.Lock()
         self.state = {"bass": 0.0, "mid": 0.0, "high": 0.0, "beats": 0, "last_beat": 0.0, "strength": 0.0,
                       "bpm": 0.0, "heard": 0.0, "energy": 0.0, "drive": 0.0}
